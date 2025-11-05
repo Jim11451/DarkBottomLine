@@ -1,0 +1,273 @@
+# Higgs Combine configuration for DarkBottomLine framework
+
+# Datacard settings
+datacard:
+  # Process definitions
+  processes:
+    signal:
+      name: "signal"
+      rate: 1.0  # Will be scaled by cross-section
+      is_signal: true
+    ttbar:
+      name: "ttbar"
+      rate: 1.0
+      is_signal: false
+    wjets:
+      name: "wjets"
+      rate: 1.0
+      is_signal: false
+    zjets:
+      name: "zjets"
+      rate: 1.0
+      is_signal: false
+    qcd:
+      name: "qcd"
+      rate: 1.0
+      is_signal: false
+    st:
+      name: "st"
+      rate: 1.0
+      is_signal: false
+    diboson:
+      name: "diboson"
+      rate: 1.0
+      is_signal: false
+
+  # Data observation
+  data:
+    name: "data_obs"
+    rate: 1.0
+
+  # Systematic uncertainties
+  systematics:
+    # Luminosity uncertainty
+    lumi:
+      type: "lnN"
+      processes: ["signal", "ttbar", "wjets", "zjets", "qcd", "st", "diboson"]
+      value: 1.025  # 2.5% uncertainty
+
+    # B-tagging scale factors
+    btagSF:
+      type: "shape"
+      processes: ["signal", "ttbar", "wjets", "zjets", "qcd", "st", "diboson"]
+      value: 1.0
+
+    # Jet energy scale
+    JES:
+      type: "shape"
+      processes: ["signal", "ttbar", "wjets", "zjets", "qcd", "st", "diboson"]
+      value: 1.0
+
+    # Jet energy resolution
+    JER:
+      type: "shape"
+      processes: ["signal", "ttbar", "wjets", "zjets", "qcd", "st", "diboson"]
+      value: 1.0
+
+    # MET scale
+    MET_scale:
+      type: "shape"
+      processes: ["signal", "ttbar", "wjets", "zjets", "qcd", "st", "diboson"]
+      value: 1.0
+
+    # MET resolution
+    MET_resolution:
+      type: "shape"
+      processes: ["signal", "ttbar", "wjets", "zjets", "qcd", "st", "diboson"]
+      value: 1.0
+
+    # Pileup
+    pileup:
+      type: "shape"
+      processes: ["signal", "ttbar", "wjets", "zjets", "qcd", "st", "diboson"]
+      value: 1.0
+
+    # Lepton scale factors
+    muonSF:
+      type: "shape"
+      processes: ["signal", "ttbar", "wjets", "zjets", "qcd", "st", "diboson"]
+      value: 1.0
+
+    electronSF:
+      type: "shape"
+      processes: ["signal", "ttbar", "wjets", "zjets", "qcd", "st", "diboson"]
+      value: 1.0
+
+    # Rate parameters for control regions
+    rate_parameters:
+      ttbar_CR_to_SR:
+        type: "rateParam"
+        regions: ["TTbarCR"]
+        processes: ["ttbar"]
+        value: 1.0
+        uncertainty: 0.3  # 30% uncertainty
+
+      zjets_CR_to_SR:
+        type: "rateParam"
+        regions: ["ZjetsCR"]
+        processes: ["zjets"]
+        value: 1.0
+        uncertainty: 0.2  # 20% uncertainty
+
+      qcd_CR_to_SR:
+        type: "rateParam"
+        regions: ["QCDCR"]
+        processes: ["qcd"]
+        value: 1.0
+        uncertainty: 0.5  # 50% uncertainty
+
+# Fit settings
+fit:
+  # Fit strategy
+  strategy: "robustHesse"  # robustHesse, robustMinos, minos
+
+  # Fit regions
+  regions:
+    SR_only: ["SR"]
+    SR_plus_CR: ["SR", "TTbarCR", "ZjetsCR", "QCDCR"]
+    all_regions: ["SR", "TTbarCR", "ZjetsCR", "QCDCR", "VR_HighMET", "VR_LowBjet"]
+
+  # Signal hypothesis
+  signal_hypothesis:
+    include_signal: true
+    signal_mass: 1000  # GeV
+    signal_cross_section: 1.0  # pb
+
+  # Fit options
+  options:
+    # Asymptotic limits
+    asymptotic_limits:
+      expected: true
+      toys: 1000
+      r_min: 0.0
+      r_max: 10.0
+
+    # Fit diagnostics
+    fit_diagnostics:
+      save_shapes: true
+      save_norm: true
+      save_with_unc: true
+
+    # Goodness of fit
+    goodness_of_fit:
+      toys: 1000
+      seed: 12345
+      algorithm: "saturated"  # saturated, KS, AD
+
+# Output settings
+output:
+  # Datacard file
+  datacard_file: "datacard.txt"
+
+  # Shape files
+  shapes_file: "shapes.root"
+
+  # Workspace file
+  workspace_file: "workspace.root"
+
+  # Fit results
+  fit_results:
+    asymptotic_limits: "asymptotic_limits.root"
+    fit_diagnostics: "fitDiagnostics.root"
+    goodness_of_fit: "gof.root"
+    impacts: "impacts.json"
+
+  # Plots
+  plots_dir: "plots/"
+
+  # Log files
+  log_dir: "logs/"
+
+# Advanced settings
+advanced:
+  # Combine commands
+  combine_commands:
+    # Text2workspace
+    text2workspace: "text2workspace.py"
+
+    # Combine
+    combine: "combine"
+
+    # CombineTool
+    combine_tool: "combineTool.py"
+
+  # Combine options
+  combine_options:
+    # General options
+    general:
+      - "--cminDefaultMinimizerStrategy=0"
+      - "--cminDefaultMinimizerTolerance=0.1"
+      - "--cminDefaultMinimizerPrecision=0.1"
+
+    # Asymptotic limits
+    asymptotic_limits:
+      - "--run=expected"
+      - "--rMin=0"
+      - "--rMax=10"
+
+    # Fit diagnostics
+    fit_diagnostics:
+      - "--saveShapes"
+      - "--saveNormalizations"
+      - "--saveWithUncertainties"
+
+    # Goodness of fit
+    goodness_of_fit:
+      - "--algo=saturated"
+      - "--toys=1000"
+      - "--seed=12345"
+
+    # Impacts
+    impacts:
+      - "--rMin=0"
+      - "--rMax=10"
+      - "--cminDefaultMinimizerStrategy=0"
+
+  # Parallel processing
+  parallel:
+    enabled: true
+    n_workers: 4
+    batch_size: 100
+
+  # Memory management
+  memory:
+    max_memory: "8GB"
+    cleanup: true
+
+  # Debugging
+  debug:
+    verbose: false
+    save_intermediate: false
+    log_level: "INFO"
+
+# Validation settings
+validation:
+  # Check datacard consistency
+  check_datacard: true
+
+  # Validate shapes
+  validate_shapes: true
+
+  # Check systematic uncertainties
+  check_systematics: true
+
+  # Validate rate parameters
+  validate_rate_params: true
+
+  # Cross-check with expected values
+  cross_check: true
+
+# Documentation
+documentation:
+  # Generate documentation
+  generate_docs: true
+
+  # Include comments in datacard
+  include_comments: true
+
+  # Save configuration
+  save_config: true
+
+  # Generate summary
+  generate_summary: true
+

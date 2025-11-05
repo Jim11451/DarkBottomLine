@@ -1,0 +1,77 @@
+# Plotting configuration for DarkBottomLine framework
+# This file allows you to customize which plots are generated for different regions and categories
+
+# Variables that should NOT use log scale (multiplicity plots, etc.)
+no_log_scale_vars:
+  - n_jets
+  - n_bjets
+  - n_muons
+  - n_electrons
+  - n_taus
+  - n_leptons
+  - n_pv
+  - pu_npv
+
+# Region-specific variable exclusions
+# Format:
+#   "region_pattern": [list of variable names to exclude]
+#
+# Matching rules:
+#   1. Exact region match: "1b:SR" matches only the exact region "1b:SR"
+#   2. Pattern match: "Top" matches any region containing "Top" (e.g., "2b:CR_Top_mu")
+#   3. Category pattern: "1b:" matches all regions in 1b category
+#
+# Default exclusions (already applied):
+#   - z_mass and z_pt are excluded from Top and W CRs
+#   - Lepton variables are excluded from SRs
+#   - Jet3 variables are excluded from 1b SR and 1b CRs
+
+region_exclusions:
+  # Exclude z_mass and z_pt from Top CRs (default - can be overridden)
+  SR:
+    - z_mass
+    - z_pt
+
+  Top:
+    - z_mass
+    - z_pt
+
+  # Exclude z_mass and z_pt from W CRs (default - can be overridden)
+  Wlnu:
+    - z_mass
+    - z_pt
+  Wenu:
+    - z_mass
+    - z_pt
+  Wmunu:
+    - z_mass
+    - z_pt
+
+  # Example: Exclude additional variables from specific regions
+  # Uncomment and modify as needed:
+  # "1b:SR":
+  #   - jet3_pt
+  #   - jet3_eta
+  #   - m_jet1jet3
+
+  # "2b:SR":
+  #   - lep1_pt
+  #   - lep2_pt
+
+  # Example: Exclude variables from all regions in a category
+  # "1b:":
+  #   - some_variable
+
+  # Example: Exclude variables from all Z CRs
+  # Zll:
+  #   - w_mass
+  #   - w_pt
+
+# Plot settings
+plot_settings:
+  figsize: [12, 8]
+  dpi: 300
+  format: "pdf"
+
+
+

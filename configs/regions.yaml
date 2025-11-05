@@ -1,0 +1,117 @@
+# Region definitions for DarkBottomLine analysis
+# Each region specifies selection cuts and expected backgrounds
+
+regions:
+  "1b:SR":
+    description: "Signal region, 1 b-tag category"
+    cuts:
+      Nbjets: "==1"
+      Njets: "<=2"           # veto third jet
+      Nleptons: "==0"
+      Ntaus: "==0"
+      MET: ">50"             # Relaxed from 250
+      DeltaPhi: ">0.1"       # Relaxed from 0.5
+
+  "2b:SR":
+    description: "Signal region, 2 b-tag category"
+    cuts:
+      Nbjets: "==2"
+      Njets: "==3"           # exactly three jets
+      Nleptons: "==0"
+      Ntaus: "==0"
+      MET: ">50"             # Relaxed from 250
+      DeltaPhi: ">0.1"       # Relaxed from 0.5
+
+  "1b:CR_Wlnu_mu":
+    description: "W+jets control region in 1b category (muon)"
+    cuts:
+      Nbjets: "==1"
+      Nmuons: "==1"
+      Nelectrons: "==0"
+      Recoil: ">250"
+      MET: ">100"
+      MT: "<160"
+      NAdditionalJets: "==0"
+  "1b:CR_Wlnu_el":
+    description: "W+jets control region in 1b category (electron)"
+    cuts:
+      Nbjets: "==1"
+      Nelectrons: "==1"
+      Nmuons: "==0"
+      Recoil: ">250"
+      MET: ">100"
+      MT: "<160"
+      NAdditionalJets: "==0"
+  "2b:CR_Top_mu":
+    description: "Top control region in 2b category (muon)"
+    cuts:
+      Nbjets: "==2"
+      Nmuons: "==1"
+      Nelectrons: "==0"
+      Recoil: ">250"
+      MT: "<160"
+      NAdditionalJets: ">=1"
+      Njets: ">=3"
+  "2b:CR_Top_el":
+    description: "Top control region in 2b category (electron)"
+    cuts:
+      Nbjets: "==2"
+      Nelectrons: "==1"
+      Nmuons: "==0"
+      Recoil: ">250"
+      MT: "<160"
+      NAdditionalJets: ">=1"
+      Njets: ">=3"
+
+  "1b:CR_Zll_mu":
+    description: "Z+jets CR (1b definition) muon channel"
+    cuts:
+      Nmuons: "==2"
+      Nelectrons: "==0"
+      Recoil: ">250"
+      MllMin: ">70"
+      MllMax: "<110"
+      Njets: "<=2"
+      Jet1Pt: ">100"
+  "1b:CR_Zll_el":
+    description: "Z+jets CR (1b definition) electron channel"
+    cuts:
+      Nelectrons: "==2"
+      Nmuons: "==0"
+      Recoil: ">250"
+      MllMin: ">70"
+      MllMax: "<110"
+      Njets: "<=2"
+      Jet1Pt: ">100"
+
+  "2b:CR_Zll_mu":
+    description: "Z+jets CR (2b definition) muon channel"
+    cuts:
+      Nmuons: "==2"
+      Nelectrons: "==0"
+      Recoil: ">250"
+      MllMin: ">70"
+      MllMax: "<110"
+      Njets: "<=3"
+      NjetsMin: ">1"
+      Jet1Pt: ">100"
+  "2b:CR_Zll_el":
+    description: "Z+jets CR (2b definition) electron channel"
+    cuts:
+      Nelectrons: "==2"
+      Nmuons: "==0"
+      Recoil: ">250"
+      MllMin: ">70"
+      MllMax: "<110"
+      Njets: "<=3"
+      NjetsMin: ">1"
+      Jet1Pt: ">100"
+
+# Global region settings
+settings:
+  min_events: 1
+  max_overlap: 0.2
+
+validation:
+  check_orthogonality: true
+  check_overlap: true

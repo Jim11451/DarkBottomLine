@@ -1,0 +1,200 @@
+"""
+Event selection functions for DarkBottomLine framework.
+"""
+
+import awkward as ak
+import numpy as np
+from typing import Dict, Any, List, Tuple
+
+
+def pass_triggers(events: ak.Array, trigger_paths: List[str]) -> ak.Array:
+    """
+    Check if events pass any of the specified trigger paths.
+
+    Args:
+        events: Awkward Array of events
+        trigger_paths: List of trigger path names to check
+
+    Returns:
+        Boolean mask for events passing triggers
+    """
+    if not trigger_paths:
+        return ak.ones_like(events["event"], dtype=bool)
+
+    # Initialize with False
+    trigger_mask = ak.zeros_like(events["event"], dtype=bool)
+
+    # Check each trigger path
+    for trigger in trigger_paths:
+        if trigger in events.fields:
+            trigger_branch = events[trigger]
+            trigger_mask = trigger_mask | trigger_branch
+
+    return trigger_mask
+
+
+def pass_met_filters(events: ak.Array, filter_names: List[str]) -> ak.Array:
+    """
+    Check if events pass all specified MET filters.
+
+    Args:
+        events: Awkward Array of events
+        filter_names: List of MET filter names to check
+
+    Returns:
+        Boolean mask for events passing all filters
+    """
+    if not filter_names:
+        return ak.ones_like(events["event"], dtype=bool)
+
+    # Initialize with True
+    filter_mask = ak.ones_like(events["event"], dtype=bool)
+
+    # Check each filter
+    for filter_name in filter_names:
+        if filter_name in events.fields:
+            filter_branch = events[filter_name]
+            filter_mask = filter_mask & filter_branch
+
+    return filter_mask
+
+
+def select_events(
+    events: ak.Array,
+    objects: Dict[str, Any],
+    config: Dict[str, Any]
+) -> ak.Array:
+    """
+    Apply event-level selection cuts.
+
+    Args:
+        events: Awkward Array of events
+        objects: Dictionary containing selected objects
+        config: Configuration dictionary with event selection cuts
+
+    Returns:
+        Boolean mask for events passing selection
+    """
+    selection = config["event_selection"]
+
+    # Count objects per event
+    n_muons = ak.num(objects["muons"], axis=1)
+    n_electrons = ak.num(objects["electrons"], axis=1)
+    n_taus = ak.num(objects["taus"], axis=1)
+    n_jets = ak.num(objects["jets"], axis=1)
+    n_bjets = ak.num(objects["bjets"], axis=1)
+
+    # Apply multiplicity cuts
+    muon_cut = (n_muons >= selection["min_muons"]) & (n_muons <= selection["max_muons"])
+    electron_cut = (n_electrons >= selection["min_electrons"]) & (n_electrons <= selection["max_electrons"])
+    tau_cut = (n_taus >= selection["min_taus"]) & (n_taus <= selection["max_taus"])
+    jet_cut = n_jets >= selection["min_jets"]
+    bjet_cut = n_bjets >= selection["min_bjets"]
+
+    # MET cut
+    met_cut = events["PFMET_pt"] > selection["met_min"]
+
+    # Combine all cuts
+    event_mask = muon_cut & electron_cut & tau_cut & jet_cut & bjet_cut & met_cut
+
+    return event_mask
+
+
+def get_cutflow(
+    events: ak.Array,
+    objects: Dict[str, Any],
+    config: Dict[str, Any]
+) -> Dict[str, int]:
+    """
+    Calculate cutflow for event selection.
+
+    Args:
+        events: Awkward Array of events
+        objects: Dictionary containing selected objects
+        config: Configuration dictionary
+
+    Returns:
+        Dictionary with cut names and event counts
+    """
+    n_total = len(events)
+
+    # Trigger selection
+    trigger_mask = pass_triggers(events, config["triggers"]["MET"])
+    n_trigger = ak.sum(trigger_mask)
+
+    # MET filter selection
+    filter_mask = pass_met_filters(events, config["met_filters"])
+    n_filters = ak.sum(trigger_mask & filter_mask)
+
+    # Object selection
+    n_muons = ak.sum(ak.num(objects["muons"], axis=1) > 0)
+    n_electrons = ak.sum(ak.num(objects["electrons"], axis=1) > 0)
+    n_taus = ak.sum(ak.num(objects["taus"], axis=1) > 0)
+    n_jets = ak.sum(ak.num(objects["jets"], axis=1) > 0)
+    n_bjets = ak.sum(ak.num(objects["bjets"], axis=1) > 0)
+
+    # Event selection
+    event_mask = select_events(events, objects, config)
+    n_selected = ak.sum(event_mask)
+
+    return {
+        "Total events": n_total,
+        "Pass trigger": n_trigger,
+        "Pass filters": n_filters,
+        "Has muons": n_muons,
+        "Has electrons": n_electrons,
+        "Has taus": n_taus,
+        "Has jets": n_jets,
+        "Has bjets": n_bjets,
+        "Final selection": n_selected,
+    }
+
+
+def apply_selection(
+    events: ak.Array,
+    objects: Dict[str, Any],
+    config: Dict[str, Any]
+) -> Tuple[ak.Array, Dict[str, Any], Dict[str, int]]:
+    """
+    Apply complete event selection including triggers, filters, and cuts.
+
+    Args:
+        events: Awkward Array of events
+        objects: Dictionary containing selected objects
+        config: Configuration dictionary
+
+    Returns:
+        Tuple of (selected_events, selected_objects, cutflow)
+    """
+    print("  Applying trigger selection...")
+    # Apply trigger selection
+    trigger_mask = pass_triggers(events, config["triggers"]["MET"])
+    print(f"    Events passing triggers: {ak.sum(trigger_mask)}")
+
+    print("  Applying MET filter selection...")
+    # Apply MET filter selection
+    filter_mask = pass_met_filters(events, config["met_filters"])
+    print(f"    Events passing MET filters: {ak.sum(filter_mask)}")
+
+    print("  Applying event selection...")
+    # Apply event selection
+    event_mask = select_events(events, objects, config)
+    print(f"    Events passing event selection: {ak.sum(event_mask)}")
+
+    # Combine all masks
+    final_mask = trigger_mask & filter_mask & event_mask
+    print(f"    Events passing all selections: {ak.sum(final_mask)}")
+
+    # Apply selection to events and objects
+    selected_events = events[final_mask]
+    selected_objects = {}
+    for key, obj in objects.items():
+        if isinstance(obj, ak.Array):
+            selected_objects[key] = obj[final_mask]
+        else:
+            selected_objects[key] = obj
+
+    # Calculate cutflow
+    cutflow = get_cutflow(events, objects, config)
+
+    return selected_events, selected_objects, cutflow
