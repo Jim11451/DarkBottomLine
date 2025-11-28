@@ -160,6 +160,7 @@ darkbottomline run \
     --config configs/2024.yaml \
     --input /path/to/nanoaod.root \
     --output results.pkl \
+    --event-selection-output output/event_selected.pkl  # optional: save events passing event-level selection
     --executor iterative
 ```
 
@@ -175,6 +176,9 @@ darkbottomline run \
 - `--executor`: Execution backend (iterative, futures, dask)
 - `--workers`: Number of parallel workers (for futures/dask)
 - `--max-events`: Maximum number of events to process
+- `--event-selection-output`: Optional path to save events that pass event-level selection (supports `.pkl` and `.root`).
+    - If you provide a `.pkl` path, a plain-Python-serializable pickle will be saved (Awkward arrays converted to lists) and a raw awkward backup `*.awk_raw.pkl` will also be created when possible.
+    - If you provide a `.root` path, a small ROOT TTree `Events` will be written containing scalar branches (event identifiers, MET scalars, and object multiplicities) for easy inspection in ROOT.
 
 **Plotting Commands:**
 - `make-plots`: Generate individual variable plots and grouped plots

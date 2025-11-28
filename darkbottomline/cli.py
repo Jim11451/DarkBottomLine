@@ -59,8 +59,8 @@ def run_analysis(args):
 
         logging.info(f"Loaded {len(events)} events")
 
-        # Process events
-        results = processor.process(events)
+        # Process events (optionally save event-level selection)
+        results = processor.process(events, event_selection_output=args.event_selection_output)
 
         # Save results
         import pickle
@@ -106,8 +106,8 @@ def run_analyzer(args):
 
         logging.info(f"Loaded {len(events)} events")
 
-        # Process events through regions
-        results = analyzer.process(events)
+        # Process events through regions (optionally save event-level selection)
+        results = analyzer.process(events, event_selection_output=args.event_selection_output)
 
         # Save results
         import os
@@ -354,6 +354,7 @@ Examples:
     run_parser.add_argument("--config", required=True, help="Configuration file")
     run_parser.add_argument("--input", required=True, help="Input file")
     run_parser.add_argument("--output", required=True, help="Output file")
+    run_parser.add_argument("--event-selection-output", help="Path to save events that pass event-level selection (optional)")
     run_parser.add_argument("--executor", choices=["iterative", "futures", "dask"],
                            default="iterative", help="Execution backend")
     run_parser.add_argument("--workers", type=int, default=4, help="Number of workers")
@@ -366,6 +367,7 @@ Examples:
     analyze_parser.add_argument("--regions-config", required=True, help="Regions configuration file")
     analyze_parser.add_argument("--input", required=True, help="Input file")
     analyze_parser.add_argument("--output", required=True, help="Output file")
+    analyze_parser.add_argument("--event-selection-output", help="Path to save events that pass event-level selection (optional)")
     analyze_parser.add_argument("--executor", choices=["iterative", "futures", "dask"],
                                default="iterative", help="Execution backend")
     analyze_parser.add_argument("--workers", type=int, default=4, help="Number of workers")

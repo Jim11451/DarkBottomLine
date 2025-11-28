@@ -13,6 +13,7 @@ from .processor import DarkBottomLineProcessor
 from .objects import build_objects
 from .regions import RegionManager
 from .histograms import HistogramManager
+from .selections import apply_selection
 
 
 class DarkBottomLineAnalyzer:
@@ -115,7 +116,7 @@ class DarkBottomLineAnalyzer:
                 "weights": []
             }
 
-    def process(self, events: ak.Array) -> Dict[str, Any]:
+    def process(self, events: ak.Array, event_selection_output: Optional[str] = None) -> Dict[str, Any]:
         """
         Process events through all regions.
 
@@ -130,6 +131,26 @@ class DarkBottomLineAnalyzer:
         # Build physics objects directly for regioning
         logging.info("Building physics objects for regions...")
         objects = build_objects(events, self.base_processor.config)
+
+        # Optionally perform and save event-level selection before regioning
+        if event_selection_output:
+            try:
+                logging.info("Applying event-level selection before region analysis...")
+                selected_events, selected_objects, cutflow = apply_selection(
+                    events, objects, self.base_processor.config
+                )
+                # Save using base processor helper
+                try:
+                    self.base_processor._save_event_selection(event_selection_output, selected_events, selected_objects)
+                    logging.info(f"Saved pre-region event selection to {event_selection_output}")
+                except Exception as e:
+                    logging.warning(f"Failed to save pre-region event selection to {event_selection_output}: {e}")
+
+                # Continue analysis using the selected events/objects
+                events = selected_events
+                objects = selected_objects
+            except Exception as e:
+                logging.warning(f"Error during pre-region event selection: {e}")
 
         # Apply region cuts
         logging.info("Applying region cuts...")
