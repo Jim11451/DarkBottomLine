@@ -32,6 +32,17 @@ def load_config(config_path: str) -> Dict[str, Any]:
         return yaml.safe_load(f)
 
 
+def _get_input_files(input_list: List[str]) -> List[str]:
+    """
+    Expand input list from a .txt file if provided.
+    """
+    if len(input_list) == 1 and input_list[0].endswith(".txt"):
+        logging.info(f"Reading input files from {input_list[0]}")
+        with open(input_list[0], 'r') as f:
+            return [line.strip() for line in f if line.strip() and not line.strip().startswith("#")]
+    return input_list
+
+
 def run_analysis(args):
     """Run basic analysis."""
     logging.info("Running basic analysis...")
@@ -47,10 +58,10 @@ def run_analysis(args):
         import uproot
         import awkward as ak
 
-        logging.info(f"Loading events from {args.input}")
-        with uproot.open(args.input) as f:
-            # Load all branches
-            events = f["Events"].arrays()
+        input_files = _get_input_files(args.input)
+        logging.info(f"Loading events from {len(input_files)} files")
+
+        events = uproot.concatenate([f"{path}:Events" for path in input_files])
 
         # Limit events if specified
         if args.max_events and len(events) > args.max_events:
@@ -95,9 +106,10 @@ def run_analyzer(args):
         import uproot
         import awkward as ak
 
-        logging.info(f"Loading events from {args.input}")
-        with uproot.open(args.input) as f:
-            events = f["Events"].arrays()
+        input_files = _get_input_files(args.input)
+        logging.info(f"Loading events from {len(input_files)} files")
+
+        events = uproot.concatenate([f"{path}:Events" for path in input_files])
 
         # Limit events if specified
         if args.max_events and len(events) > args.max_events:
@@ -130,8 +142,8 @@ def train_dnn(args):
     trainer = DNNTrainer(args.config)
 
     # Load data
-    signal_files = args.signal_files
-    background_files = args.background_files
+    signal_files = _get_input_files(args.signal)
+    background_files = _get_input_files(args.background)
 
     features, labels, masses = trainer.load_data(signal_files, background_files)
 
@@ -352,7 +364,7 @@ Examples:
     # Run command
     run_parser = subparsers.add_parser("run", help="Run basic analysis")
     run_parser.add_argument("--config", required=True, help="Configuration file")
-    run_parser.add_argument("--input", required=True, help="Input file")
+    run_parser.add_argument("--input", nargs="+", required=True, help="Input file(s), can be a single .txt file listing paths")
     run_parser.add_argument("--output", required=True, help="Output file")
     run_parser.add_argument("--event-selection-output", help="Path to save events that pass event-level selection (optional)")
     run_parser.add_argument("--executor", choices=["iterative", "futures", "dask"],
@@ -365,7 +377,7 @@ Examples:
     analyze_parser = subparsers.add_parser("analyze", help="Run multi-region analysis")
     analyze_parser.add_argument("--config", required=True, help="Base configuration file")
     analyze_parser.add_argument("--regions-config", required=True, help="Regions configuration file")
-    analyze_parser.add_argument("--input", required=True, help="Input file")
+    analyze_parser.add_argument("--input", nargs="+", required=True, help="Input file(s), can be a single .txt file listing paths")
     analyze_parser.add_argument("--output", required=True, help="Output file")
     analyze_parser.add_argument("--event-selection-output", help="Path to save events that pass event-level selection (optional)")
     analyze_parser.add_argument("--executor", choices=["iterative", "futures", "dask"],
@@ -377,8 +389,8 @@ Examples:
     # Train DNN command
     train_dnn_parser = subparsers.add_parser("train-dnn", help="Train DNN model")
     train_dnn_parser.add_argument("--config", required=True, help="DNN configuration file")
-    train_dnn_parser.add_argument("--signal", nargs="+", required=True, help="Signal files")
-    train_dnn_parser.add_argument("--background", nargs="+", required=True, help="Background files")
+    train_dnn_parser.add_argument("--signal", nargs="+", required=True, help="Signal files, can be a single .txt file listing paths")
+    train_dnn_parser.add_argument("--background", nargs="+", required=True, help="Background files, can be a single .txt file listing paths")
     train_dnn_parser.add_argument("--output", required=True, help="Output model file")
     train_dnn_parser.add_argument("--plot-history", action="store_true", help="Plot training history")
     train_dnn_parser.set_defaults(func=train_dnn)
