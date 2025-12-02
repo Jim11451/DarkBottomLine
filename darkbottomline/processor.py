@@ -216,11 +216,6 @@ class DarkBottomLineProcessor:
         if outdir:
             os.makedirs(outdir, exist_ok=True)
 
-        # Use pickle to store a safe, plain-Python-serializable version of the
-        # selected events and objects to avoid Awkward/dask pickling incompat
-        # issues when opening the file in different environments or tools.
-        #
-        # Strategy:
         # 1) Save a human/inspection-friendly representation where all
         #    Awkward arrays are converted to plain Python lists (via
         #    ak.to_list). This is what we write to `output_file`.
@@ -280,7 +275,7 @@ class DarkBottomLineProcessor:
         except Exception as e:
             logging.warning(f"Failed to save raw awkward backup to {raw_backup}: {e}")
 
-        # Additionally, if user requested a ROOT file (output_file endswith .root),
+        
         # write a simple TTree with scalar branches for easy inspection in ROOT.
         if output_file.endswith('.root'):
             try:

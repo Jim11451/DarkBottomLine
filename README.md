@@ -55,13 +55,13 @@ The DarkBottomLine framework supports a complete analysis workflow from NanoAOD 
 
 #### Step 1: Run Multi-Region Analysis
 
-Run the analysis on your input files (data, MC backgrounds, signal):
+Run the analysis on your input files (data, MC backgrounds, signal). You can provide input files one by one, as multiple arguments, or listed in a `.txt` file.
 
 ```bash
 # Activate virtual environment
 source venv/bin/activate
 
-# Run analysis on data
+# Run analysis on a single data file
 darkbottomline analyze \
     --config configs/2024.yaml \
     --regions-config configs/regions.yaml \
@@ -69,25 +69,26 @@ darkbottomline analyze \
     --output outputs/hists/regions_data.pkl \
     --max-events 10000
 
-# Run analysis on MC backgrounds
+# Run analysis on MC backgrounds from a list of files in a .txt file
 darkbottomline analyze \
     --config configs/2024.yaml \
     --regions-config configs/regions.yaml \
-    --input /path/to/mc/nano_dy.root \
+    --input my_background_files.txt \
     --output outputs/hists/regions_dy.pkl
 
-# Run analysis on signal
+# Run analysis on multiple signal files directly
 darkbottomline analyze \
     --config configs/2024.yaml \
     --regions-config configs/regions.yaml \
-    --input /path/to/signal/nano_signal.root \
+    --input /path/to/signal/nano_signal_1.root /path/to/signal/nano_signal_2.root \
     --output outputs/hists/regions_signal.pkl
 ```
+When using a `.txt` file for input, list one file path per line. Empty lines and lines starting with `#` will be ignored.
 
 **Analysis Options:**
 - `--config`: Base configuration file (e.g., `configs/2024.yaml`)
 - `--regions-config`: Regions configuration file (e.g., `configs/regions.yaml`)
-- `--input`: Input NanoAOD ROOT file
+- `--input`: Input NanoAOD ROOT file(s). Can be a single file, multiple files, or a `.txt` file containing a list of file paths.
 - `--output`: Output pickle file path
 - `--executor`: Execution backend (iterative, futures, dask) - default: iterative
 - `--workers`: Number of parallel workers (for futures/dask) - default: 4
@@ -128,14 +129,13 @@ darkbottomline make-plots \
 source venv/bin/activate
 cd /path/to/DarkBottomLine
 
-# 2. Run analysis on all samples
-for sample in data dy signal; do
-    darkbottomline analyze \
-        --config configs/2024.yaml \
-        --regions-config configs/regions.yaml \
-        --input /path/to/nanoaod/nano_${sample}.root \
-        --output outputs/hists/regions_${sample}.pkl
-done
+# 2. Run analysis on all samples (using a .txt file for inputs)
+# Create a file, e.g. dy_inputs.txt, with your list of ROOT files.
+darkbottomline analyze \
+    --config configs/2024.yaml \
+    --regions-config configs/regions.yaml \
+    --input dy_inputs.txt \
+    --output outputs/hists/regions_dy.pkl
 
 # 3. Generate plots
 darkbottomline make-plots \
@@ -158,9 +158,9 @@ For a simple single-region analysis without the multi-region framework:
 ```bash
 darkbottomline run \
     --config configs/2024.yaml \
-    --input /path/to/nanoaod.root \
+    --input /path/to/nanoaod_or_file_list.txt \
     --output results.pkl \
-    --event-selection-output output/event_selected.pkl  # optional: save events passing event-level selection
+    --event-selection-output output/event_selected.pkl  # optional: save events for event-level selection
     --executor iterative
 ```
 
@@ -171,14 +171,14 @@ darkbottomline run \
 - `run`: Simple single-region analysis
 - `--config`: Path to YAML configuration file
 - `--regions-config`: Path to regions configuration file (for `analyze` command)
-- `--input`: Path to input NanoAOD file(s)
+- `--input`: Path to input NanoAOD file(s). Can be a single file, multiple files, or a `.txt` file containing a list of file paths.
 - `--output`: Path to output file (supports .parquet, .root, .pkl)
 - `--executor`: Execution backend (iterative, futures, dask)
 - `--workers`: Number of parallel workers (for futures/dask)
 - `--max-events`: Maximum number of events to process
 - `--event-selection-output`: Optional path to save events that pass event-level selection (supports `.pkl` and `.root`).
-    - If you provide a `.pkl` path, a plain-Python-serializable pickle will be saved (Awkward arrays converted to lists) and a raw awkward backup `*.awk_raw.pkl` will also be created when possible.
-    - If you provide a `.root` path, a small ROOT TTree `Events` will be written containing scalar branches (event identifiers, MET scalars, and object multiplicities) for easy inspection in ROOT.
+    - If you provide a `.pkl` path, a plain-Python-serializable pickle will be saved and a raw awkward backup `*.awk_raw.pkl` will also be created.
+    - If you provide a `.root` path, a small ROOT TTree `Events` will be written containing scalar branches (event identifiers, MET scalars, and object multiplicities).
 
 **Plotting Commands:**
 - `make-plots`: Generate individual variable plots and grouped plots
@@ -189,12 +189,14 @@ darkbottomline run \
 
 ### Example with Different Executors
 
+The input flexibility works with all executors. For example:
+
 ```bash
 # Iterative execution (single-threaded, good for debugging)
-python run_analysis.py --config configs/2023.yaml --input nanoaod.root --output results.pkl --executor iterative
+python run_analysis.py --config configs/2023.yaml --input my_files.txt --output results.pkl --executor iterative
 
 # Futures execution (multi-threaded, good for local parallelization)
-python run_analysis.py --config configs/2023.yaml --input nanoaod.root --output results.parquet --executor futures --workers 4
+python run_analysis.py --config configs/2023.yaml --input file1.root file2.root --output results.parquet --executor futures --workers 4
 
 # Dask execution (distributed, good for production)
 python run_analysis.py --config configs/2023.yaml --input nanoaod.root --output results.root --executor dask --workers 8
