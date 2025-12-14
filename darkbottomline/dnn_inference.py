@@ -183,13 +183,22 @@ class DNNInference:
 
         features = []
 
+        def _get_met_field_value(field_name_v15, field_name_v12, default_value_if_missing):
+            if field_name_v15 in events.fields:
+                return ak.to_numpy(events[field_name_v15])
+            elif field_name_v12 in events.fields:
+                return ak.to_numpy(events[field_name_v12])
+            else:
+                # Return an empty array of appropriate size if neither field exists
+                return np.full(len(events), default_value_if_missing)
+
         for feature in met_config:
             if feature == "met_pt":
-                features.append(ak.to_numpy(events["PFMET_pt"]))
+                features.append(_get_met_field_value("PFMET_pt", "MET_pt", 0.0))
             elif feature == "met_phi":
-                features.append(ak.to_numpy(events["PFMET_phi"]))
+                features.append(_get_met_field_value("PFMET_phi", "MET_phi", 0.0))
             elif feature == "met_significance":
-                features.append(ak.to_numpy(events["PFMET_significance"]))
+                features.append(_get_met_field_value("PFMET_significance", "MET_significance", 0.0))
 
         if features:
             return np.column_stack(features)
@@ -232,10 +241,12 @@ class DNNInference:
                 jets = objects.get("jets", ak.Array([]))
                 if len(ak.flatten(jets)) > 0:
                     ht = ak.sum(jets.pt, axis=1)
-                    st = ht + events["PFMET_pt"]
+                    met_pt = events["PFMET_pt"] if "PFMET_pt" in events.fields else events["MET_pt"]
+                    st = ht + met_pt
                     features.append(ak.to_numpy(st))
                 else:
-                    features.append(ak.to_numpy(events["PFMET_pt"]))
+                    met_pt = events["PFMET_pt"] if "PFMET_pt" in events.fields else events["MET_pt"]
+                    features.append(ak.to_numpy(met_pt))
 
         if features:
             return np.column_stack(features)
@@ -254,7 +265,7 @@ class DNNInference:
                 # DeltaPhi between MET and leading jet
                 jets = objects.get("jets", ak.Array([]))
                 if len(ak.flatten(jets)) > 0:
-                    met_phi = events["PFMET_phi"]
+                    met_phi = events["PFMET_phi"] if "PFMET_phi" in events.fields else events["MET_phi"]
                     jet_phi = jets.phi
                     delta_phi = ak.min(abs(jet_phi - met_phi), axis=1)
                     delta_phi = ak.fill_none(delta_phi, 0.0)
@@ -265,7 +276,7 @@ class DNNInference:
                 # DeltaPhi between MET and second leading jet
                 jets = objects.get("jets", ak.Array([]))
                 if len(ak.flatten(jets)) > 0:
-                    met_phi = events["PFMET_phi"]
+                    met_phi = events["PFMET_phi"] if "PFMET_phi" in events.fields else events["MET_phi"]
                     jet_phi = jets.phi
                     # Sort jets by pT and get second leading
                     sorted_indices = ak.argsort(jets.pt, axis=1, ascending=False)
@@ -282,7 +293,7 @@ class DNNInference:
                 # DeltaPhi between MET and third leading jet
                 jets = objects.get("jets", ak.Array([]))
                 if len(ak.flatten(jets)) > 0:
-                    met_phi = events["PFMET_phi"]
+                    met_phi = events["PFMET_phi"] if "PFMET_phi" in events.fields else events["MET_phi"]
                     jet_phi = jets.phi
                     # Sort jets by pT and get third leading
                     sorted_indices = ak.argsort(jets.pt, axis=1, ascending=False)

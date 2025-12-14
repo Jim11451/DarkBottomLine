@@ -188,9 +188,9 @@ class DarkBottomLineProcessor:
             "run": events.run,
             "luminosityBlock": events.luminosityBlock,
             "MET": {
-                "pt": events["PFMET_pt"],
-                "phi": events["PFMET_phi"],
-                "significance": events["PFMET_significance"],
+                "pt": events["PFMET_pt"] if "PFMET_pt" in events.fields else events["MET_pt"],
+                "phi": events["PFMET_phi"] if "PFMET_phi" in events.fields else events["MET_phi"],
+                "significance": events["PFMET_significance"] if "PFMET_significance" in events.fields else events["MET_significance"],
             },
             "weights": weights,
         }
@@ -299,18 +299,18 @@ class DarkBottomLineProcessor:
                     branches['luminosityBlock'] = np.asarray(ak.to_list(events.get('luminosityBlock', [])))
 
                 # MET scalars
-                try:
-                    branches['PFMET_pt'] = ak.to_numpy(events['PFMET_pt'])
-                except Exception:
-                    branches['PFMET_pt'] = np.asarray(ak.to_list(events.get('PFMET_pt', [])))
-                try:
-                    branches['PFMET_phi'] = ak.to_numpy(events['PFMET_phi'])
-                except Exception:
-                    branches['PFMET_phi'] = np.asarray(ak.to_list(events.get('PFMET_phi', [])))
-                try:
-                    branches['PFMET_significance'] = ak.to_numpy(events['PFMET_significance'])
-                except Exception:
-                    branches['PFMET_significance'] = np.asarray(ak.to_list(events.get('PFMET_significance', [])))
+                def _get_met_field_array(field_name_v15, field_name_v12):
+                    if field_name_v15 in events.fields:
+                        return ak.to_numpy(events[field_name_v15])
+                    elif field_name_v12 in events.fields:
+                        return ak.to_numpy(events[field_name_v12])
+                    else:
+                        # Return an empty array of appropriate size if neither field exists
+                        return np.asarray([]) if len(events) == 0 else np.zeros(len(events), dtype=float)
+
+                branches['PFMET_pt'] = _get_met_field_array('PFMET_pt', 'MET_pt')
+                branches['PFMET_phi'] = _get_met_field_array('PFMET_phi', 'MET_phi')
+                branches['PFMET_significance'] = _get_met_field_array('PFMET_significance', 'MET_significance')
 
                 # Object multiplicities
                 def safe_num(obj_key):

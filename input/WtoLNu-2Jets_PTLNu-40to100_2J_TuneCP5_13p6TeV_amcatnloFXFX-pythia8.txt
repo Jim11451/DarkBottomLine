@@ -1,0 +1,5 @@
+input/mc/WtoLNu-2Jets_PTLNu-40to100_2J_TuneCP5_13p6TeV_amcatnloFXFX-pythia8/NANOAODSIM/130X_mcRun3_2023_realistic_v14-v3/2810000/8b50ea04-0629-4223-a0b5-d6b7809fb3f8.root
+input/mc/WtoLNu-2Jets_PTLNu-40to100_2J_TuneCP5_13p6TeV_amcatnloFXFX-pythia8/NANOAODSIM/130X_mcRun3_2023_realistic_v14-v3/2810000/a916518b-2147-4c28-9399-0235a0361b72.root
+input/mc/WtoLNu-2Jets_PTLNu-40to100_2J_TuneCP5_13p6TeV_amcatnloFXFX-pythia8/NANOAODSIM/130X_mcRun3_2023_realistic_v14-v3/2810000/ef4f8a21-44ed-4c70-b712-ede740d1ba82.root
+input/mc/WtoLNu-2Jets_PTLNu-40to100_2J_TuneCP5_13p6TeV_amcatnloFXFX-pythia8/NANOAODSIM/130X_mcRun3_2023_realistic_v14-v3/2810000/ff507d2d-3ba7-4c56-9d46-b5011dfe78d2.root
+input/mc/WtoLNu-2Jets_PTLNu-40to100_2J_TuneCP5_13p6TeV_amcatnloFXFX-pythia8/NANOAODSIM/130X_mcRun3_2023_realistic_v14-v3/2810000/ff93deb2-ed98-419f-9efc-3d559f969e4e.root

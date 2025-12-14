@@ -1,0 +1,5 @@
+input/mc/TTto2L2Nu_TuneCP5_13p6TeV_powheg-pythia8/NANOAODSIM/130X_mcRun3_2022_realistic_v5-v2/40000/0128d2f0-f489-4eed-80d0-7240071b9314.root
+input/mc/TTto2L2Nu_TuneCP5_13p6TeV_powheg-pythia8/NANOAODSIM/130X_mcRun3_2022_realistic_v5-v2/40000/0bc1d189-c0c1-4d34-8286-dd66b9aeb1b7.root
+input/mc/TTto2L2Nu_TuneCP5_13p6TeV_powheg-pythia8/NANOAODSIM/130X_mcRun3_2022_realistic_v5-v2/40000/693990fc-c8a1-4bf5-99ba-10845541e395.root
+input/mc/TTto2L2Nu_TuneCP5_13p6TeV_powheg-pythia8/NANOAODSIM/130X_mcRun3_2022_realistic_v5-v2/40000/8e19bf87-6db0-43b6-b5df-ccca341ae243.root
+input/mc/TTto2L2Nu_TuneCP5_13p6TeV_powheg-pythia8/NANOAODSIM/130X_mcRun3_2022_realistic_v5-v2/40000/f7267ea1-1288-4112-a06a-849bf1f36dfa.root

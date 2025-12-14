@@ -115,9 +115,15 @@ class Region:
         # Special variables
         if var == "MET":
             try:
-                return ak.fill_none(events["PFMET_pt"], 0.0)
+                if "PFMET_pt" in events.fields:
+                    return ak.fill_none(events["PFMET_pt"], 0.0)
+                else:
+                    return ak.fill_none(events["MET_pt"], 0.0)
             except Exception:
-                return events["PFMET_pt"]
+                if "PFMET_pt" in events.fields:
+                    return events["PFMET_pt"]
+                else:
+                    return events["MET_pt"]
         if var == "Nbjets":
             return ak.num(objects.get("bjets", ak.Array([])), axis=1)
         if var == "Njets" or var == "NjetsMin":
@@ -147,8 +153,8 @@ class Region:
             return n_jets - n_bjets
         if var == "Recoil":
             # Recoil = | -( pTmiss + sum pT(leptons) ) |
-            met_pt = events["PFMET_pt"]
-            met_phi = events["PFMET_phi"]
+            met_pt = events["PFMET_pt"] if "PFMET_pt" in events.fields else events["MET_pt"]
+            met_phi = events["PFMET_phi"] if "PFMET_phi" in events.fields else events["MET_phi"]
 
             # Get lepton momenta
             muons = objects.get("muons", ak.Array([]))
@@ -169,8 +175,8 @@ class Region:
             return ak.fill_none(recoil, 0.0)
         if var == "MT":
             # Transverse mass = sqrt(2 * pT_lepton * MET * (1 - cos(Δφ)))
-            met_pt = events["PFMET_pt"]
-            met_phi = events["PFMET_phi"]
+            met_pt = events["PFMET_pt"] if "PFMET_pt" in events.fields else events["MET_pt"]
+            met_phi = events["PFMET_phi"] if "PFMET_phi" in events.fields else events["MET_phi"]
 
             # Get leading lepton
             muons = objects.get("muons", ak.Array([]))
@@ -207,7 +213,7 @@ class Region:
             return ak.fill_none(mll, 0.0)
         if var == "DeltaPhi":
             jets = objects.get("jets", ak.Array([]))
-            met_phi = events["PFMET_phi"]
+            met_phi = events["PFMET_phi"] if "PFMET_phi" in events.fields else events["MET_phi"]
 
             # Check if jets array is empty or has no structure
             if len(ak.flatten(jets)) == 0 or len(jets) == 0:
@@ -237,7 +243,7 @@ class Region:
                 return ak.max(all_leptons.pt, axis=1)
         if var == "metQuality":
             # MET Quality = (pfMET - caloMET) / Recoil
-            pf_met = events["PFMET_pt"]
+            pf_met = events["PFMET_pt"] if "PFMET_pt" in events.fields else events["MET_pt"]
             calo_met = events.get("CaloMET_pt", pf_met)  # Fallback to pfMET if caloMET not available
             recoil = self._get_variable_value(events, objects, "Recoil")
 

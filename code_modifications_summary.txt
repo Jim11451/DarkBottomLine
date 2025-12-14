@@ -1,0 +1,36 @@
+代码修改总结
+
+根据用户要求，为了将框架的触发器版本从 v15 更改为 v12，并解决因此导致的一系列兼容性问题，我对以下文件进行了修改：
+
+1.  **`configs/2022.yaml`, `configs/2023.yaml`, `configs/2024.yaml`**
+    *   **修改内容：** 在 `triggers.MET` 部分，将触发器名称 `HLT_PFMET120_PFMHT120_IDTight` 替换为 `HLT_MET120_MHT120_IDTight`，将 `HLT_PFMETNoMu120_PFMHTNoMu120_IDTight` 替换为 `HLT_METNoMu120_MHTNoMu120_IDTight`。
+    *   **修改原因：** 根据用户需求，将触发器版本从 v15 更新为 v12。通过查阅 `variable_analysis_report.csv` 文件，发现 v15 中的 `PFMET` 对应 v12 中的 `MET`。因此，对触发器名称中的 `PFMET` 和 `PFMHT` 进行了相应的替换，以确保与 v12 NanoAOD 格式的兼容性。
+
+2.  **`darkbottomline/objects.py`**
+    *   **修改内容：**
+        *   在 `select_jets` 函数中，从 `ak.zip` 调用中移除了 `"puIdDisc": events["Jet_puIdDisc"]`。
+        *   在 `select_jets` 函数中，将 `id_mask = jets.puIdDisc >= 0` 替换为 `id_mask = ak.ones_like(jets.pt, dtype=bool)`。
+        *   在 `build_objects` 函数中，从 `jets` 的 `ak.zip` 调用中移除了 `"puIdDisc": events["Jet_puIdDisc"]`。
+    *   **修改原因：** `Jet_puIdDisc` 是 NanoAOD v15 中引入的新变量，在 v12 数据文件中不存在。为了防止在处理 v12 文件时因访问不存在的字段而导致程序崩溃，移除了 `select_jets` 和 `build_objects` 函数中对 `Jet_puIdDisc` 的直接引用。同时，为了在禁用此剪切的同时保持代码的逻辑完整性，将 `id_mask` 设置为 `ak.ones_like(jets.pt, dtype=bool)`，使得所有射流都能通过此选择。
+
+3.  **`darkbottomline/regions.py`**
+    *   **修改内容：** 对于 `var` 为 `"MET"`、`"Recoil"`、`"MT"`、`"DeltaPhi"` 和 `"metQuality"` 的情况，将直接访问 `events["PFMET_pt"]` 和 `events["PFMET_phi"]` 的代码替换为条件检查：`events["PFMET_pt"] if "PFMET_pt" in events.fields else events["MET_pt"]` 和 `events["PFMET_phi"] if "PFMET_phi" in events.fields else events["MET_phi"]`。
+    *   **修改原因：** 解决在应用区域剪切时，由于直接访问 v15 变量 `PFMET_pt` 和 `PFMET_phi` 导致的“`no field 'PFMET_pt' in record`”错误。通过引入条件检查，代码现在能够智能地判断 `PFMET` 字段是否存在，如果不存在则回退到使用 v12 对应的 `MET` 字段，从而确保分析对两种 NanoAOD 格式的兼容性。
+
+4.  **`darkbottomline/analyzer.py`**
+    *   **修改内容：**
+        *   在文件顶部添加了 `import json`。
+        *   在 `_create_skimmed_events` 函数中，将直接访问 `events["PFMET_pt"]`、`events["PFMET_phi"]` 和 `events["PFMET_significance"]` 的代码替换为条件检查（如上所述，判断字段是否存在并回退到 `MET` 字段）。
+        *   在 `_save_event_selection` 函数（特别是 ROOT 文件导出部分）中，将 `f["metadata"] = self.accumulator.get("metadata", {})` 替换为先通过 `metadata_str = json.dumps(self.accumulator.get("metadata", {}))` 将元数据字典序列化为 JSON 字符串，然后使用 `f.mktree("metadata_tree", {"value": [metadata_str]}, title="Metadata")` 显式创建 `TStringBranch` 进行存储。
+        *   在 `_calculate_region_variables` 函数中，对于 `variables["met"]` 和 `met_phi` 的计算，将直接访问替换为条件检查（与 `regions.py` 中的修改类似）。
+    *   **修改原因：** 综合解决了在分析处理过程中，因直接访问 v15 特定变量和元数据存储方式不兼容而导致的错误。
+        *   **`_create_skimmed_events` 和 `_calculate_region_variables`：** 确保了在处理 v12 文件时，对 `MET` 相关变量的正确访问，避免了因字段缺失而崩溃。
+        *   **`_save_event_selection`：** 解决了之前直接将 Python 字典写入 ROOT 文件时 `uproot` 无法序列化导致的“`len() of unsized object`”错误。通过将元数据转换为 JSON 字符串并使用 `TStringBranch` 显式存储，保证了元数据的正确性和可读性。
+
+5.  **`darkbottomline/dnn_inference.py`**
+    *   **修改内容：** 在 `_extract_met_features`、`_extract_event_features` 和 `_extract_derived_features` 函数中，将直接访问 `events["PFMET_pt"]`、`events["PFMET_phi"]` 和 `events["PFMET_significance"]` 的代码替换为条件检查（与 `regions.py` 和 `analyzer.py` 中的修改类似）。同时，在 `_extract_met_features` 中引入了辅助函数 `_get_met_field_value`。
+    *   **修改原因：** 解决在 DNN 推理过程中，因直接访问 v15 特定 MET 变量导致的错误。通过一致的条件检查和辅助函数的使用，确保了 DNN 特征提取模块对不同 NanoAOD 版本的兼容性。
+
+6.  **`darkbottomline/histograms.py`**
+    *   **修改内容：** 在 `_fill_hist_histograms` 和 `_fill_fallback_histograms` 函数中，将直接访问 `events["PFMET_pt"]` 的代码替换为条件检查：`events["PFMET_pt"] if "PFMET_pt" in events.fields else events["MET_pt"]`。
+    *   **修改原因：** 解决在填充直方图时，因直接访问 v15 变量 `PFMET_pt` 导致的错误。通过添加条件检查，确保在 `PFMET_pt` 字段不存在时回退到使用 v12 对应的 `MET_pt` 字段，从而保证直方图填充的兼容性。
