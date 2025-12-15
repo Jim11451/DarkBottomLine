@@ -92,7 +92,8 @@ def select_events(
     bjet_cut = n_bjets >= selection["min_bjets"]
 
     # MET cut
-    met_cut = events["PFMET_pt"] > selection["met_min"]
+    met_pt = events["PFMET_pt"] if "PFMET_pt" in events.fields else events["MET_pt"]
+    met_cut = met_pt > selection["met_min"]
 
     # Combine all cuts
     event_mask = muon_cut & electron_cut & tau_cut & jet_cut & bjet_cut & met_cut
