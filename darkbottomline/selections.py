@@ -167,10 +167,12 @@ def apply_selection(
     Returns:
         Tuple of (selected_events, selected_objects, cutflow)
     """
-    print("  Applying trigger selection...")
-    # Apply trigger selection
-    trigger_mask = pass_triggers(events, config["triggers"]["MET"])
-    print(f"    Events passing triggers: {ak.sum(trigger_mask)}")
+    combined_trigger_mask = ak.zeros_like(events["event"], dtype=bool)
+    for trigger_type, trigger_paths in config["triggers"].items():
+        if trigger_paths: # Only apply if there are paths for this type
+            type_mask = pass_triggers(events, trigger_paths)
+            combined_trigger_mask = combined_trigger_mask | type_mask
+    trigger_mask = combined_trigger_mask
 
     print("  Applying MET filter selection...")
     # Apply MET filter selection
