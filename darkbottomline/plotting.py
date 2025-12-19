@@ -126,6 +126,16 @@ class PlotManager:
                 res = {k.strip(): v for k, v in res.items()}
                 hist_obj = res.get('region_histograms', {}).get(reg, {}).get(var, None)
                 if hist_obj and isinstance(hist_obj, hist.Hist):
+                    if var == "met": # Apply cut for MET plots
+                        met_axis_name = None
+                        for axis in hist_obj.axes:
+                            if axis.name == "met":
+                                met_axis_name = axis.name
+                                break
+                        if met_axis_name:
+                            hist_obj = hist_obj[{met_axis_name: slice(hist.loc(150.0), None)}]
+                        else:
+                            logging.warning(f"MET axis not found in histogram for variable '{var}'. Cannot apply 200GeV cut.")
                     return hist_obj
                 else:
                     logging.warning(f"Could not load histogram '{var}' for region '{reg}' from {path}")
@@ -141,16 +151,9 @@ class PlotManager:
 
         # Load background histograms and group them by process
         bkg_hists_by_proc = {}
-        process_map = {
-            'dy_2l_2j': 'zjets',
-            'tt_2l2nu_2j_test': 'ttbar',
-            'w_lnu_2j_test': 'wjets',
-            'z_2nu_2j_test': 'zjets',
-        }
-
         for bkg_file in background_files:
             proc_name_from_file = Path(bkg_file).stem
-            proc_name = process_map.get(proc_name_from_file, 'other')
+            proc_name = proc_name_from_file.split('_')[0]
             
             h = load_hist_from_file(bkg_file, variable, region)
             if h:
@@ -218,6 +221,7 @@ class PlotManager:
             )
         
         ax.set_ylabel('Events/bin')
+        ax.set_xlabel('') # Remove redundant x-label from top plot
         ax.set_yscale('log')
         ax.legend()
 

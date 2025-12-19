@@ -178,28 +178,33 @@ class Region:
             met_pt = events["PFMET_pt"] if "PFMET_pt" in events.fields else events["MET_pt"]
             met_phi = events["PFMET_phi"] if "PFMET_phi" in events.fields else events["MET_phi"]
 
-            # Get leading lepton
             muons = objects.get("muons", ak.Array([]))
             electrons = objects.get("electrons", ak.Array([]))
 
             mt = ak.zeros_like(met_pt)
 
-            # Check for single muon
-            if len(ak.flatten(muons)) > 0:
-                muon_pt = ak.max(muons.pt, axis=1)
-                muon_phi = muons.phi[ak.argmax(muons.pt, axis=1)]
-                delta_phi = np.abs(muon_phi - met_phi)
-                delta_phi = ak.where(delta_phi > np.pi, 2*np.pi - delta_phi, delta_phi)
-                mt = np.sqrt(2 * muon_pt * met_pt * (1 - np.cos(delta_phi)))
+            # Muon MT
+            has_muons = ak.num(muons) > 0
+            leading_muon = ak.firsts(muons[ak.argsort(muons.pt, ascending=False, axis=1)])
+            muon_pt = leading_muon.pt
+            muon_phi = leading_muon.phi
+            delta_phi_mu = abs(muon_phi - met_phi)
+            delta_phi_mu = ak.where(delta_phi_mu > np.pi, 2 * np.pi - delta_phi_mu, delta_phi_mu)
+            mt_mu = np.sqrt(2 * muon_pt * met_pt * (1 - np.cos(delta_phi_mu)))
+            
+            mt = ak.where(has_muons, mt_mu, mt)
 
-            # Check for single electron
-            elif len(ak.flatten(electrons)) > 0:
-                ele_pt = ak.max(electrons.pt, axis=1)
-                ele_phi = electrons.phi[ak.argmax(electrons.pt, axis=1)]
-                delta_phi = np.abs(ele_phi - met_phi)
-                delta_phi = ak.where(delta_phi > np.pi, 2*np.pi - delta_phi, delta_phi)
-                mt = np.sqrt(2 * ele_pt * met_pt * (1 - np.cos(delta_phi)))
+            # Electron MT for events without muons
+            has_electrons = ak.num(electrons) > 0
+            leading_electron = ak.firsts(electrons[ak.argsort(electrons.pt, ascending=False, axis=1)])
+            ele_pt = leading_electron.pt
+            ele_phi = leading_electron.phi
+            delta_phi_el = abs(ele_phi - met_phi)
+            delta_phi_el = ak.where(delta_phi_el > np.pi, 2 * np.pi - delta_phi_el, delta_phi_el)
+            mt_el = np.sqrt(2 * ele_pt * met_pt * (1 - np.cos(delta_phi_el)))
 
+            mt = ak.where(~has_muons & has_electrons, mt_el, mt)
+            
             return ak.fill_none(mt, 0.0)
         if var in ("Mll", "MllMin", "MllMax"):
             # Simplified dilepton invariant mass calculation
