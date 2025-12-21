@@ -459,7 +459,8 @@ class HistogramManager:
             weights = ak.to_numpy(weights)
 
         # Fill MET histogram
-        histograms["met"].fill(met=events["PFMET_pt"], weight=weights)
+        met_pt = events["PFMET_pt"] if "PFMET_pt" in events.fields else events["MET_pt"]
+        histograms["met"].fill(met=met_pt, weight=weights)
 
         # Fill multiplicity histograms
         n_jets = ak.num(objects["jets"], axis=1)
@@ -538,7 +539,7 @@ class HistogramManager:
             weights = ak.to_numpy(weights)
 
         # Fill MET histogram
-        met_values = ak.to_numpy(events["PFMET_pt"])
+        met_values = ak.to_numpy(events["PFMET_pt"] if "PFMET_pt" in events.fields else events["MET_pt"])
         histograms["met"]["values"].extend(met_values)
         histograms["met"]["weights"].extend(weights)
 

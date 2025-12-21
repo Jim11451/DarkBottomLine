@@ -8,6 +8,7 @@ import time
 import logging
 from typing import Dict, Any, Optional, Union
 from pathlib import Path
+import json
 
 from .processor import DarkBottomLineProcessor
 from .objects import build_objects
@@ -297,7 +298,7 @@ class DarkBottomLineAnalyzer:
             return {}
 
         # MET
-        variables["met"] = events["PFMET_pt"]
+        variables["met"] = events["PFMET_pt"] if "PFMET_pt" in events.fields else events["MET_pt"]
 
         # Jet multiplicity
         jets = objects.get("jets", ak.Array([]))
@@ -334,7 +335,7 @@ class DarkBottomLineAnalyzer:
 
         # DeltaPhi between MET and jets
         jets = objects.get("jets", ak.Array([]))
-        met_phi = events["PFMET_phi"]
+        met_phi = events["PFMET_phi"] if "PFMET_phi" in events.fields else events["MET_phi"]
 
         # Check if any events have jets
         n_jets_per_event = ak.num(jets, axis=1)
@@ -569,8 +570,9 @@ class DarkBottomLineAnalyzer:
                     for hist_name, hist in histograms.items():
                         f[f"{region_name}_{hist_name}"] = hist
 
-                # Save metadata
-                f["metadata"] = self.accumulator.get("metadata", {})
+                # Save metadata as a JSON string
+                metadata_str = json.dumps(self.accumulator.get("metadata", {}))
+                f["metadata"] = metadata_str
 
             logging.info(f"Saved region results to {output_file}")
         except ImportError:

@@ -86,6 +86,7 @@ class PlotManager:
         signal_file: Optional[str],
         output_path: str,
         variable: str = "met",
+        region: str = "1b:SR",
         xlabel: str = "MET [GeV]",
         title_tag: str = "CMS Preliminary  (13.6 TeV, 2023)",
         bins: Optional[np.ndarray] = None,
@@ -101,143 +102,160 @@ class PlotManager:
             signal_file: Path to signal results pickle (may be None)
             output_path: Output file path (e.g. outputs/plots/stacked_met.pdf)
             variable: Variable key to plot (default: 'met')
+            region: The analysis region to plot (default: '1b:SR')
             xlabel: X-axis label
             title_tag: CMS label text
-            bins: Optional bin edges array
+            bins: Optional bin edges array (Note: rebinning is not yet supported for hist.Hist objects)
 
         Returns:
             Output file path
         """
         import pickle
         from matplotlib.gridspec import GridSpec
-
-        def load_hist(path: str, var: str):
-            with open(path, 'rb') as f:
-                res = pickle.load(f)
-            h = res.get('histograms', {})
-            # Support fallback dict structure
-            if var in h and isinstance(h[var], dict) and 'values' in h[var]:
-                values = np.array(h[var]['values'])
-                weights = np.array(h[var]['weights']) if len(h[var]['weights']) == len(h[var]['values']) else np.ones_like(values)
-                return values, weights
-            # Unsupported structure → return empty
-            return np.array([]), np.array([])
-
-        # Load data
-        data_vals = np.array([]); data_w = np.array([])
-        if data_file:
-            data_vals, data_w = load_hist(data_file, variable)
-
-        # Load backgrounds and sum
-        bkg_hist_total = None
-        edges = None
-        if bins is None:
-            bins = np.linspace(0, 600, 31)
-        for bkg_file in background_files:
-            vals, wts = load_hist(bkg_file, variable)
-            if vals.size == 0:
-                continue
-            hist, edges = np.histogram(vals, bins=bins, weights=wts)
-            if bkg_hist_total is None:
-                bkg_hist_total = hist.astype(float)
-            else:
-                bkg_hist_total += hist
-        if bkg_hist_total is None:
-            bkg_hist_total = np.zeros(len(bins) - 1, dtype=float)
-            edges = bins
-
-        # Load signal
-        sig_hist = np.zeros_like(bkg_hist_total)
-        if signal_file:
-            svals, sw = load_hist(signal_file, variable)
-            if svals.size > 0:
-                sig_hist, _ = np.histogram(svals, bins=bins, weights=sw)
-
-        # Data histogram
-        data_hist = np.zeros_like(bkg_hist_total)
-        if data_vals.size > 0:
-            data_hist, _ = np.histogram(data_vals, bins=bins, weights=data_w)
-
-        centers = 0.5 * (edges[1:] + edges[:-1])
-
-        # Plot
-        fig = plt.figure(figsize=(8, 8), dpi=self.dpi)
-        gs = GridSpec(2, 1, height_ratios=[3, 1], hspace=0.06)
-        ax = fig.add_subplot(gs[0])
-        rax = fig.add_subplot(gs[1], sharex=ax)
-
-        # Background stack (single summed component for now)
-        ax.bar(
-            centers,
-            bkg_hist_total,
-            width=np.diff(edges),
-            align='center',
-            color=self.colors.get('zjets', '#a6cee3'),
-            edgecolor='black',
-            linewidth=0.8,
-            label=self.labels.get('zjets', 'Background')
-        )
-        # Total bkg outline
-        ax.step(np.r_[edges[:-1], edges[-1]], np.r_[bkg_hist_total, bkg_hist_total[-1]], where='post', color='black', linewidth=1.2, label='bkgSum')
-
-        # Uncertainty band: sqrt(N) as placeholder
-        bkg_unc = np.sqrt(np.clip(bkg_hist_total, 0.0, None))
-        ax.fill_between(
-            np.r_[edges[:-1]],
-            bkg_hist_total - bkg_unc,
-            bkg_hist_total + bkg_unc,
-            step='post',
-            facecolor='none',
-            edgecolor='gray',
-            hatch='xx',
-            linewidth=0.0,
-            alpha=0.6,
-            label='stat'
-        )
-
-        # Signal overlay
-        if np.any(sig_hist > 0):
-            ax.plot(centers, sig_hist, color=self.colors.get('signal', '#e31a1c'), linewidth=1.8, label=self.labels.get('signal', 'Signal'))
-
-        # Data points
-        if np.any(data_hist > 0):
-            ax.errorbar(
-                centers,
-                data_hist,
-                yerr=np.sqrt(np.maximum(data_hist, 1.0)),
-                fmt='o',
-                color='black',
-                label='Data'
-            )
-
-        ax.set_ylabel('Events/bin')
-        ax.set_yscale('log')
-        ax.set_ylim(max(1e-1, np.min(bkg_hist_total[bkg_hist_total>0])*0.2) if np.any(bkg_hist_total>0) else 1e-1,
-                    max(np.max([data_hist.max() if data_hist.size else 1, bkg_hist_total.max() if bkg_hist_total.size else 1])*3, 10))
-        ax.legend(ncol=2, fontsize=10, frameon=False, loc='upper right')
-        ax.grid(True, axis='y', alpha=0.2)
-
-        # CMS label
         try:
-            from .utils.plot_utils import add_cms_label
-            add_cms_label(ax, year=title_tag.split(',')[-1].replace(')', '').strip() if ',' in title_tag else '2023', lumi=35.9, preliminary=True)
-        except Exception:
-            ax.set_title(title_tag, loc='left', fontsize=11)
+            import hist
+            import mplhep as hep
+        except ImportError:
+            logging.error("The 'hist' and 'mplhep' libraries are required. Please install them.")
+            return ""
 
-        # Ratio panel: (Data - Pred)/Pred
-        tot_bkg_safe = np.where(bkg_hist_total > 0, bkg_hist_total, 1.0)
-        ratio = np.divide((data_hist - bkg_hist_total), tot_bkg_safe, out=np.zeros_like(data_hist, dtype=float), where=tot_bkg_safe != 0)
-        ratio_err = np.where(data_hist > 0, np.sqrt(data_hist) / tot_bkg_safe, 0.0)
-        rax.axhline(0.0, color='black', linewidth=1)
-        rax.errorbar(centers, ratio, yerr=ratio_err, fmt='o', color='black')
-        # Uncertainty band in ratio
-        r_unc = np.divide(bkg_unc, tot_bkg_safe, out=np.zeros_like(bkg_unc, dtype=float), where=tot_bkg_safe != 0)
-        rax.fill_between(np.r_[edges[:-1]], -r_unc, r_unc, step='post', facecolor='none', edgecolor='gray', hatch='xx', linewidth=0.0, alpha=0.6)
+        def load_hist_from_file(path: str, var: str, reg: str) -> Optional[hist.Hist]:
+            try:
+                with open(path, 'rb') as f:
+                    res = pickle.load(f)
+                res = {k.strip(): v for k, v in res.items()}
+                hist_obj = res.get('region_histograms', {}).get(reg, {}).get(var, None)
+                if hist_obj and isinstance(hist_obj, hist.Hist):
+                    if var == "met": # Apply cut for MET plots
+                        met_axis_name = None
+                        for axis in hist_obj.axes:
+                            if axis.name == "met":
+                                met_axis_name = axis.name
+                                break
+                        if met_axis_name:
+                            hist_obj = hist_obj[{met_axis_name: slice(hist.loc(150.0), None)}]
+                        else:
+                            logging.warning(f"MET axis not found in histogram for variable '{var}'. Cannot apply 200GeV cut.")
+                    return hist_obj
+                else:
+                    logging.warning(f"Could not load histogram '{var}' for region '{reg}' from {path}")
+                    return None
+            except Exception as e:
+                logging.error(f"Error loading histogram from {path}: {e}")
+                return None
+
+        # Load data histogram
+        data_hist = None
+        if data_file:
+            data_hist = load_hist_from_file(data_file, variable, region)
+
+        # Load background histograms and group them by process
+        bkg_hists_by_proc = {}
+        for bkg_file in background_files:
+            proc_name_from_file = Path(bkg_file).stem
+            proc_name = proc_name_from_file.split('_')[0]
+            
+            h = load_hist_from_file(bkg_file, variable, region)
+            if h:
+                if proc_name in bkg_hists_by_proc:
+                    bkg_hists_by_proc[proc_name] += h
+                else:
+                    bkg_hists_by_proc[proc_name] = h
+        
+        if not bkg_hists_by_proc:
+            logging.error(f"No background histograms found for variable '{variable}' in region '{region}'.")
+            return ""
+
+        # --- Normalization ---
+        data_integral = data_hist.sum().value if data_hist and data_hist.sum().value > 0 else 0.0
+        mc_total_hist = sum(bkg_hists_by_proc.values())
+        mc_integral = mc_total_hist.sum().value if mc_total_hist.sum().value > 0 else 0.0
+
+        scale_factor = 1.0
+        if mc_integral > 0 and data_integral > 0:
+            scale_factor = data_integral / mc_integral
+        
+        logging.info(f"Data integral: {data_integral}, MC integral: {mc_integral}, Scale factor: {scale_factor}")
+
+        # Apply scale factor
+        bkg_hists_scaled = {proc: h * scale_factor for proc, h in bkg_hists_by_proc.items()}
+        
+        # --- Sorting for stacking ---
+        # Sort backgrounds by their integral in ascending order
+        sorted_procs = sorted(bkg_hists_scaled.keys(), key=lambda p: bkg_hists_scaled[p].sum().value)
+        
+        sorted_hists = [bkg_hists_scaled[p] for p in sorted_procs]
+        sorted_labels = [self.labels.get(p, p) for p in sorted_procs]
+        sorted_colors = [self.colors.get(p, '#a6cee3') for p in sorted_procs]
+        
+        mc_total_hist_scaled = sum(sorted_hists)
+
+        # --- Plotting ---
+        fig, (ax, rax) = plt.subplots(2, 1, figsize=(8, 8), gridspec_kw={"height_ratios": (3, 1)}, sharex=True)
+        fig.subplots_adjust(hspace=0.06)
+
+        # Plot stacked backgrounds
+        hep.histplot(
+            sorted_hists,
+            ax=ax,
+            stack=True,
+            histtype='fill',
+            label=sorted_labels,
+            color=sorted_colors
+        )
+
+        # Plot data
+        if data_hist and data_hist.sum().value > 0:
+            hep.histplot(data_hist, ax=ax, histtype='errorbar', color='black', label='Data', yerr=True)
+
+        # Plot total MC uncertainty
+        if mc_total_hist_scaled.sum().value > 0:
+            ax.stairs(
+                values=mc_total_hist_scaled.values() + np.sqrt(mc_total_hist_scaled.variances()),
+                baseline=mc_total_hist_scaled.values() - np.sqrt(mc_total_hist_scaled.variances()),
+                edges=mc_total_hist_scaled.axes[0].edges,
+                label='Stat. Unc.',
+                hatch='///',
+                facecolor='none',
+                linewidth=0
+            )
+        
+        ax.set_ylabel('Events/bin')
+        ax.set_xlabel('') # Remove redundant x-label from top plot
+        ax.set_yscale('log')
+        ax.legend()
+
+        # Ratio plot
+        if data_hist and mc_total_hist_scaled.sum().value > 0:
+            # Manually calculate ratio and errors
+            data_vals = data_hist.values()
+            data_vars = data_hist.variances()
+            mc_vals = mc_total_hist_scaled.values()
+            mc_vars = mc_total_hist_scaled.variances()
+            
+            # Avoid division by zero
+            mc_vals_safe = np.where(mc_vals > 0, mc_vals, 1)
+            
+            ratio_vals = data_vals / mc_vals_safe
+            
+            # Error propagation for ratio: sqrt((err_data/mc)**2 + (data*err_mc/mc**2)**2)
+            # Simplified: err_ratio = err_data / mc
+            err_data_sq = data_vars / mc_vals_safe**2
+            err_mc_sq = (data_vals**2 * mc_vars) / mc_vals_safe**4
+            ratio_err = np.sqrt(err_data_sq + err_mc_sq)
+            
+            centers = data_hist.axes[0].centers
+            
+            rax.errorbar(centers, ratio_vals, yerr=ratio_err, fmt='o', color='black')
+
+        rax.axhline(1, ls='--', color='gray')
         rax.set_ylabel('(Data-Pred)/Pred')
         rax.set_xlabel(xlabel)
-        rax.set_ylim(-0.5, 0.5)
-        rax.grid(True, axis='y', alpha=0.2)
+        rax.set_ylim(0.5, 1.5)
 
+        # CMS label
+        hep.cms.label(ax=ax, data=True, year=title_tag.split(',')[1].strip() if ',' in title_tag else '2023', lumi=59.7)
+        
         # Save
         out_path = Path(output_path)
         out_path.parent.mkdir(parents=True, exist_ok=True)

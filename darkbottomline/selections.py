@@ -92,7 +92,8 @@ def select_events(
     bjet_cut = n_bjets >= selection["min_bjets"]
 
     # MET cut
-    met_cut = events["PFMET_pt"] > selection["met_min"]
+    met_pt = events["PFMET_pt"] if "PFMET_pt" in events.fields else events["MET_pt"]
+    met_cut = met_pt > selection["met_min"]
 
     # Combine all cuts
     event_mask = muon_cut & electron_cut & tau_cut & jet_cut & bjet_cut & met_cut
@@ -166,10 +167,12 @@ def apply_selection(
     Returns:
         Tuple of (selected_events, selected_objects, cutflow)
     """
-    print("  Applying trigger selection...")
-    # Apply trigger selection
-    trigger_mask = pass_triggers(events, config["triggers"]["MET"])
-    print(f"    Events passing triggers: {ak.sum(trigger_mask)}")
+    combined_trigger_mask = ak.zeros_like(events["event"], dtype=bool)
+    for trigger_type, trigger_paths in config["triggers"].items():
+        if trigger_paths: # Only apply if there are paths for this type
+            type_mask = pass_triggers(events, trigger_paths)
+            combined_trigger_mask = combined_trigger_mask | type_mask
+    trigger_mask = combined_trigger_mask
 
     print("  Applying MET filter selection...")
     # Apply MET filter selection

@@ -1,0 +1,2 @@
+input/data/data1.root
+input/data/data2.root
