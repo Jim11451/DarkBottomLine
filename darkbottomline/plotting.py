@@ -87,7 +87,6 @@ class PlotManager:
         output_path: str,
         variable: str = "met",
         region: str = "1b:SR",
-        xlabel: str = "MET [GeV]",
         title_tag: str = "CMS Preliminary  (13.6 TeV, 2023)",
         bins: Optional[np.ndarray] = None,
         version: Optional[str] = None,
@@ -103,7 +102,6 @@ class PlotManager:
             output_path: Output file path (e.g. outputs/plots/stacked_met.pdf)
             variable: Variable key to plot (default: 'met')
             region: The analysis region to plot (default: '1b:SR')
-            xlabel: X-axis label
             title_tag: CMS label text
             bins: Optional bin edges array (Note: rebinning is not yet supported for hist.Hist objects)
 
@@ -126,16 +124,6 @@ class PlotManager:
                 res = {k.strip(): v for k, v in res.items()}
                 hist_obj = res.get('region_histograms', {}).get(reg, {}).get(var, None)
                 if hist_obj and isinstance(hist_obj, hist.Hist):
-                    if var == "met": # Apply cut for MET plots
-                        met_axis_name = None
-                        for axis in hist_obj.axes:
-                            if axis.name == "met":
-                                met_axis_name = axis.name
-                                break
-                        if met_axis_name:
-                            hist_obj = hist_obj[{met_axis_name: slice(hist.loc(150.0), None)}]
-                        else:
-                            logging.warning(f"MET axis not found in histogram for variable '{var}'. Cannot apply 200GeV cut.")
                     return hist_obj
                 else:
                     logging.warning(f"Could not load histogram '{var}' for region '{reg}' from {path}")
@@ -235,26 +223,29 @@ class PlotManager:
             
             # Avoid division by zero
             mc_vals_safe = np.where(mc_vals > 0, mc_vals, 1)
-            
+            data_vals_safe = np.where(data_vals > 0, data_vals, 1)
+
             ratio_vals = data_vals / mc_vals_safe
             
-            # Error propagation for ratio: sqrt((err_data/mc)**2 + (data*err_mc/mc**2)**2)
-            # Simplified: err_ratio = err_data / mc
-            err_data_sq = data_vars / mc_vals_safe**2
-            err_mc_sq = (data_vals**2 * mc_vars) / mc_vals_safe**4
-            ratio_err = np.sqrt(err_data_sq + err_mc_sq)
+            # Error propagation for ratio: ratio * sqrt((err_data/data)^2 + (err_mc/mc)^2)
+            rel_err_data_sq = data_vars / data_vals_safe**2
+            rel_err_mc_sq = mc_vars / mc_vals_safe**2
+            ratio_err = ratio_vals * np.sqrt(rel_err_data_sq + rel_err_mc_sq)
             
             centers = data_hist.axes[0].centers
             
             rax.errorbar(centers, ratio_vals, yerr=ratio_err, fmt='o', color='black')
 
         rax.axhline(1, ls='--', color='gray')
-        rax.set_ylabel('(Data-Pred)/Pred')
-        rax.set_xlabel(xlabel)
+        rax.set_ylabel('Data/MC')
+        rax.set_xlabel(self._get_variable_label(variable))
         rax.set_ylim(0.5, 1.5)
 
-        # CMS label
-        hep.cms.label(ax=ax, data=True, year=title_tag.split(',')[1].strip() if ',' in title_tag else '2023', lumi=59.7)
+        # CMS labels
+        year = title_tag.split(',')[1].strip() if ',' in title_tag else '2023'
+        lumi = 59.7 # Placeholder, should come from config
+        hep.cms.text("Preliminary", ax=ax)
+        hep.cms.lumitext(f"{lumi:.1f} fb⁻¹ ({year})", ax=ax)
         
         # Save
         out_path = Path(output_path)
@@ -606,9 +597,15 @@ class PlotManager:
             'dr_muon_jet', 'dr_electron_jet'
         ]
 
+        # Lepton variables to exclude from SRs
+        sr_lepton_exclusion_vars = [
+            'w_mass', 'w_pt', 'z_mass', 'z_pt', 'mll', 'mt',
+            'n_muons', 'n_electrons', 'n_leptons',
+        ]
+
         if is_sr:
-            # Signal regions: exclude all lepton variables (including z_mass and z_pt)
-            excluded.extend(lepton_vars)
+            # Signal regions: exclude reconstructed W/Z and lepton counts
+            excluded.extend(sr_lepton_exclusion_vars)
 
             if category == "1b":
                 # 1b SR: also exclude jet3 variables
