@@ -211,7 +211,7 @@ class PlotManager:
         ax.set_ylabel('Events/bin')
         ax.set_xlabel('') # Remove redundant x-label from top plot
         ax.set_yscale('log')
-        ax.legend()
+        ax.legend(loc='upper right')
 
         # Ratio plot
         if data_hist and mc_total_hist_scaled.sum().value > 0:
@@ -240,6 +240,10 @@ class PlotManager:
         rax.set_ylabel('Data/MC')
         rax.set_xlabel(self._get_variable_label(variable))
         rax.set_ylim(0.5, 1.5)
+
+        # Add region text
+        ax.text(0.05, 0.05, f"Region: {region}", transform=ax.transAxes,
+                fontsize=16, va='bottom', ha='left')
 
         # CMS labels
         year = title_tag.split(',')[1].strip() if ',' in title_tag else '2023'
