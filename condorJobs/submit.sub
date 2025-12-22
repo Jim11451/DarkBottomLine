@@ -1,0 +1,24 @@
+universe = vanilla
+use_x509userproxy = true
+x509userproxy = /afs/cern.ch/user/u/username/private/x509up_u98885
+
+executable = runanalysis.sh
+arguments = $(ProcId)
+
+output  = output/dbl.$(ClusterId).$(ProcId).out
+error   = error/dbl.$(ClusterId).$(ProcId).err
+log     = log/dbl.$(ClusterId).log
+
+should_transfer_files = YES
+transfer_output_files = outputs
+
+# Send the job to Held state on failure.
+on_exit_hold = (ExitBySignal == True) || (ExitCode != 0)
+
+# Periodically retry the jobs every 10 minutes, up to a maximum of 5 retries.
+periodic_release =  (NumJobStarts < 3) && ((CurrentTime - EnteredCurrentStatus) > 600)
+
+request_memory = 8000
+request_cpus = 4
++JobFlavour = "testmatch"
+queue 1

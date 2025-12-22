@@ -59,7 +59,7 @@ def run_analysis(args):
         import awkward as ak
 
         input_files = _get_input_files(args.input)
-        logging.info(f"Loading events from {len(input_files)} files")
+        logging.info(f"Loading events from {str(input_files)} files")
 
         events = uproot.concatenate([f"{path}:Events" for path in input_files])
 
@@ -148,7 +148,7 @@ def _merge_pickle_outputs(files: List[str], output_path: str):
 def run_analyzer(args):
     """Run multi-region analysis."""
     logging.info("Running multi-region analysis...")
-    
+
     config = load_config(args.config)
     analyzer = DarkBottomLineAnalyzer(config, args.regions_config)
 
@@ -156,7 +156,7 @@ def run_analyzer(args):
         import uproot
         import awkward as ak
         import os
-        
+
         is_txt_input = len(args.input) == 1 and args.input[0].endswith(".txt")
         input_files = _get_input_files(args.input)
 
@@ -165,7 +165,7 @@ def run_analyzer(args):
             temp_files = []
             output_dir = os.path.dirname(args.output)
             os.makedirs(output_dir, exist_ok=True)
-            
+
             for i, file_path in enumerate(input_files):
                 logging.info(f"Processing file {i+1}/{len(input_files)}: {file_path}")
                 temp_output_path = os.path.join(output_dir, f"temp_{i}.pkl")
@@ -177,13 +177,13 @@ def run_analyzer(args):
                     events = events.arrays(entry_stop=args.max_events)
                 else:
                     events = events.arrays()
-                
+
                 events = ak.Array(events)
 
                 logging.info(f"Loaded {len(events)} events")
-                
+
                 results = analyzer.process(events, event_selection_output=None) # No event selection output for partial files
-                
+
                 analyzer.accumulator = results
                 analyzer.save_results(temp_output_path)
 
@@ -198,9 +198,9 @@ def run_analyzer(args):
                 logging.info(f"Limited to {args.max_events} events")
 
             logging.info(f"Loaded {len(events)} events")
-            
+
             results = analyzer.process(events, event_selection_output=args.event_selection_output)
-            
+
             os.makedirs(os.path.dirname(args.output), exist_ok=True)
             analyzer.accumulator = results
             analyzer.save_results(args.output)

@@ -18,12 +18,15 @@ DarkBottomLine is designed to process NanoAOD datasets using Coffea, producing f
 
 ## Installation
 
-### Prerequisites
 
-- Python 3.10+
+### Locally
+
+#### Prerequisites
+
+- Python 3.9+
 - Conda or pip package manager
 
-### Setup
+#### Setup
 
 1. Clone the repository:
 ```bash
@@ -33,7 +36,7 @@ cd DarkBottomLine
 
 2. Create a conda environment:
 ```bash
-conda create -n darkbottomline python=3.10
+conda create -n darkbottomline python=3.9
 conda activate darkbottomline
 ```
 
@@ -46,6 +49,52 @@ pip install -r requirements.txt
 ```bash
 pip install -e .
 ```
+
+### Lxplus
+
+1. Load the CMSSW release:
+```bash
+cmsrel CMSSW_15_0_17
+cd CMSSW_11_0_2/src
+cmsenv
+```
+
+2. Clone the repository:
+```bash
+git clone https://github.com/tiwariPC/DarkBottomLine.git
+cd DarkBottomLine
+```
+
+3. Check the pre-installed packages that come with CMSSW release:
+```bash
+python check_requirements.py
+
+# To install the missing packages
+python check_requirements.py --install --local-dir ./.local
+```
+
+4. Run final installation script:
+```bash
+chmod +x install_lxplus.sh
+./install_lxplus.sh
+```
+
+5. Export environment paths:
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+export PYTHONPATH=<full_path>/CMSSW_15_0_17/src/DarkBottomLine/.local:$PYTHONPATH
+```
+
+#### Condor Setup
+```bash
+cd condorJobs
+# Edit submit.sub file, change the user letter and username in line 3
+# Change the <full_path> in runanalysis.sh and relevant command as needed
+voms-proxy-init --voms cms --valid 192:00 && cp /tmp/x509up_u$(id -u) /afs/cern.ch/user/u/username/private/
+condor_submit submit.sub
+```
+
+
 
 ## Quick Start
 
