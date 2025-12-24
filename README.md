@@ -55,7 +55,7 @@ pip install -e .
 1. Load the CMSSW release:
 ```bash
 cmsrel CMSSW_15_0_17
-cd CMSSW_11_0_2/src
+cd CMSSW_15_0_17/src
 cmsenv
 ```
 
