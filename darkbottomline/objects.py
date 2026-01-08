@@ -123,12 +123,10 @@ def select_jets(events: ak.Array, config: Dict[str, Any]) -> ak.Array:
     Returns:
         Boolean mask for selected jets
     """
-    # Build jet collection from flat branches
     jets = ak.zip({
         "pt": events["Jet_pt"],
         "eta": events["Jet_eta"],
         "phi": events["Jet_phi"],
-        "puIdDisc": events["Jet_puIdDisc"],
         "btagDeepFlavB": events["Jet_btagDeepFlavB"],
     })
 
@@ -137,7 +135,7 @@ def select_jets(events: ak.Array, config: Dict[str, Any]) -> ak.Array:
     eta_mask = abs(jets.eta) < config["eta_max"]
 
     # Jet ID cut (simplified - would need actual CMS jet ID implementation)
-    id_mask = jets.puIdDisc >= 0  # puIdDisc branch exists (>= 0 = pass)
+    id_mask = ak.ones_like(jets.pt, dtype=bool)  # puIdDisc branch not in v12
 
     # Combine all cuts
     selection_mask = pt_mask & eta_mask & id_mask
@@ -310,7 +308,6 @@ def build_objects(events: ak.Array, config: Dict[str, Any]) -> Dict[str, Any]:
         "pt": events["Jet_pt"],
         "eta": events["Jet_eta"],
         "phi": events["Jet_phi"],
-        "puIdDisc": events["Jet_puIdDisc"],
         "btagDeepFlavB": events["Jet_btagDeepFlavB"],
     })
 

@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="darkbottomline",
-    version="1.0.0",
+    version="1.0.0-beta",
     description="Modular Coffea-based analysis framework for CMS Run 3 bbMET analysis",
     author="DarkBottomLine Team",
     python_requires=">=3.8",

@@ -136,7 +136,11 @@ def get_process_colors() -> Dict[str, str]:
         'st': '#9467bd',
         'diboson': '#8c564b',
         'triboson': '#e377c2',
-        'other': '#7f7f7f'
+        'other': '#7f7f7f',
+        'dyto2l': '#2ca02c',      # Z-jets color
+        'ttto2l2nu': '#1f77b4',   # ttbar color
+        'wtolnu': '#ff7f0e',      # W-jets color
+        'zto2nu': '#98df8a',      # A distinct lighter green for Z to 2Nu
     }
 
 
@@ -157,7 +161,11 @@ def get_process_labels() -> Dict[str, str]:
         'st': 'Single top',
         'diboson': 'Diboson',
         'triboson': 'Triboson',
-        'other': 'Other'
+        'other': 'Other',
+        'dyto2l': 'DY to 2L',
+        'ttto2l2nu': 'tt to 2L2Nu',
+        'wtolnu': 'W to LNu',
+        'zto2nu': 'Z to 2Nu',
     }
 
 

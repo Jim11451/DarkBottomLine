@@ -49,7 +49,7 @@ class DarkBottomLineProcessor:
 
         logging.info(f"Initialized DarkBottomLine processor for year {config.get('year', 'unknown')}")
 
-    def process(self, events: ak.Array) -> Dict[str, Any]:
+    def process(self, events: ak.Array, event_selection_output: Optional[str] = None) -> Dict[str, Any]:
         """
         Process events through the analysis chain.
 
@@ -83,6 +83,14 @@ class DarkBottomLineProcessor:
             events, objects, self.config
         )
         print(f"  Events passing selection: {len(selected_events)} / {len(events)} ({len(selected_events)/len(events)*100:.1f}%)")
+
+        # Optionally save event-level selection results immediately and continue
+        if event_selection_output:
+            try:
+                self._save_event_selection(event_selection_output, selected_events, selected_objects)
+                logging.info(f"Saved event-level selection to {event_selection_output}")
+            except Exception as e:
+                logging.warning(f"Failed to save event-level selection to {event_selection_output}: {e}")
 
         # Calculate corrections and weights
         print("Step 3: Calculating corrections and weights...")
@@ -180,9 +188,9 @@ class DarkBottomLineProcessor:
             "run": events.run,
             "luminosityBlock": events.luminosityBlock,
             "MET": {
-                "pt": events["PFMET_pt"],
-                "phi": events["PFMET_phi"],
-                "significance": events["PFMET_significance"],
+                "pt": events["PFMET_pt"] if "PFMET_pt" in events.fields else events["MET_pt"],
+                "phi": events["PFMET_phi"] if "PFMET_phi" in events.fields else events["MET_phi"],
+                "significance": events["PFMET_significance"] if "PFMET_significance" in events.fields else events["MET_significance"],
             },
             "weights": weights,
         }
@@ -193,6 +201,142 @@ class DarkBottomLineProcessor:
                 skimmed[obj_name] = obj_data
 
         return skimmed
+
+    def _save_event_selection(self, output_file: str, events: ak.Array, objects: Dict[str, Any]):
+        """
+        Save selected events and corresponding objects to a file.
+
+        Currently saves as a pickle unless a different format is implemented.
+        """
+        import os
+        import pickle
+
+        # Ensure output directory exists
+        outdir = os.path.dirname(output_file)
+        if outdir:
+            os.makedirs(outdir, exist_ok=True)
+
+        # 1) Save a human/inspection-friendly representation where all
+        #    Awkward arrays are converted to plain Python lists (via
+        #    ak.to_list). This is what we write to `output_file`.
+        # 2) Also attempt to save the raw awkward data as a backup next to
+        #    the main file with suffix `.awk_raw.pkl` (best-effort).
+
+        # Build serializable dict
+        serializable = {}
+        try:
+            # Convert events (awkward array) to list-of-records where possible
+            try:
+                serializable["events"] = ak.to_list(events)
+            except Exception:
+                # Fallback: try to coerce to Python list directly
+                try:
+                    serializable["events"] = list(events)
+                except Exception:
+                    serializable["events"] = None
+
+            # Convert objects: for each awkward array, convert to list
+            serializable_objects = {}
+            for k, v in objects.items():
+                if isinstance(v, ak.Array):
+                    try:
+                        serializable_objects[k] = ak.to_list(v)
+                    except Exception:
+                        try:
+                            serializable_objects[k] = list(v)
+                        except Exception:
+                            serializable_objects[k] = None
+                else:
+                    # Keep non-Awkward values as-is (likely small metadata)
+                    serializable_objects[k] = v
+
+            serializable["objects"] = serializable_objects
+
+            # Ensure output directory exists
+            outdir = os.path.dirname(output_file)
+            if outdir:
+                os.makedirs(outdir, exist_ok=True)
+
+            # Write the safe version
+            with open(output_file, "wb") as f:
+                pickle.dump(serializable, f, protocol=pickle.HIGHEST_PROTOCOL)
+
+            logging.info(f"Event selection (serializable) saved to {output_file}")
+
+        except Exception as e:
+            logging.warning(f"Failed to save serializable event selection to {output_file}: {e}")
+
+        # Try to save raw awkward structures as a backup for advanced users
+        try:
+            raw_backup = output_file + ".awk_raw.pkl"
+            with open(raw_backup, "wb") as f:
+                pickle.dump({"events": events, "objects": objects}, f, protocol=pickle.HIGHEST_PROTOCOL)
+            logging.info(f"Raw awkward backup saved to {raw_backup}")
+        except Exception as e:
+            logging.warning(f"Failed to save raw awkward backup to {raw_backup}: {e}")
+
+        
+        # write a simple TTree with scalar branches for easy inspection in ROOT.
+        if output_file.endswith('.root'):
+            try:
+                import uproot
+                import numpy as np
+
+                # Prepare flat scalar branches
+                branches = {}
+                # Standard event identifiers
+                try:
+                    branches['event'] = ak.to_numpy(events['event'])
+                except Exception:
+                    branches['event'] = np.asarray(ak.to_list(events.get('event', [])))
+                try:
+                    branches['run'] = ak.to_numpy(events['run'])
+                except Exception:
+                    branches['run'] = np.asarray(ak.to_list(events.get('run', [])))
+                try:
+                    branches['luminosityBlock'] = ak.to_numpy(events['luminosityBlock'])
+                except Exception:
+                    branches['luminosityBlock'] = np.asarray(ak.to_list(events.get('luminosityBlock', [])))
+
+                # MET scalars
+                def _get_met_field_array(field_name_v15, field_name_v12):
+                    if field_name_v15 in events.fields:
+                        return ak.to_numpy(events[field_name_v15])
+                    elif field_name_v12 in events.fields:
+                        return ak.to_numpy(events[field_name_v12])
+                    else:
+                        # Return an empty array of appropriate size if neither field exists
+                        return np.asarray([]) if len(events) == 0 else np.zeros(len(events), dtype=float)
+
+                branches['PFMET_pt'] = _get_met_field_array('PFMET_pt', 'MET_pt')
+                branches['PFMET_phi'] = _get_met_field_array('PFMET_phi', 'MET_phi')
+                branches['PFMET_significance'] = _get_met_field_array('PFMET_significance', 'MET_significance')
+
+                # Object multiplicities
+                def safe_num(obj_key):
+                    arr = objects.get(obj_key, ak.Array([]))
+                    try:
+                        return ak.to_numpy(ak.num(arr, axis=1))
+                    except Exception:
+                        return np.asarray([0] * len(branches.get('event', [])))
+
+                branches['n_muons'] = safe_num('muons')
+                branches['n_electrons'] = safe_num('electrons')
+                branches['n_taus'] = safe_num('taus')
+                branches['n_jets'] = safe_num('jets')
+                branches['n_bjets'] = safe_num('bjets')
+
+                # Write to ROOT
+                outdir = os.path.dirname(output_file)
+                if outdir:
+                    os.makedirs(outdir, exist_ok=True)
+
+                with uproot.recreate(output_file) as f:
+                    f['Events'] = branches
+
+                logging.info(f"Event selection exported to ROOT file {output_file}")
+            except Exception as e:
+                logging.warning(f"Failed to write ROOT event selection to {output_file}: {e}")
 
     def get_histogram_statistics(self) -> Dict[str, Dict[str, float]]:
         """

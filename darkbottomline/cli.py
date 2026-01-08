@@ -32,6 +32,17 @@ def load_config(config_path: str) -> Dict[str, Any]:
         return yaml.safe_load(f)
 
 
+def _get_input_files(input_list: List[str]) -> List[str]:
+    """
+    Expand input list from a .txt file if provided.
+    """
+    if len(input_list) == 1 and input_list[0].endswith(".txt"):
+        logging.info(f"Reading input files from {input_list[0]}")
+        with open(input_list[0], 'r') as f:
+            return [line.strip() for line in f if line.strip() and not line.strip().startswith("#")]
+    return input_list
+
+
 def run_analysis(args):
     """Run basic analysis."""
     logging.info("Running basic analysis...")
@@ -47,10 +58,10 @@ def run_analysis(args):
         import uproot
         import awkward as ak
 
-        logging.info(f"Loading events from {args.input}")
-        with uproot.open(args.input) as f:
-            # Load all branches
-            events = f["Events"].arrays()
+        input_files = _get_input_files(args.input)
+        logging.info(f"Loading events from {len(input_files)} files")
+
+        events = uproot.concatenate([f"{path}:Events" for path in input_files])
 
         # Limit events if specified
         if args.max_events and len(events) > args.max_events:
@@ -59,8 +70,8 @@ def run_analysis(args):
 
         logging.info(f"Loaded {len(events)} events")
 
-        # Process events
-        results = processor.process(events)
+        # Process events (optionally save event-level selection)
+        results = processor.process(events, event_selection_output=args.event_selection_output)
 
         # Save results
         import pickle
@@ -81,39 +92,118 @@ def run_analysis(args):
     logging.info("Basic analysis completed!")
 
 
+def _merge_pickle_outputs(files: List[str], output_path: str):
+    """Merge multiple pickle files containing coffea accumulators."""
+    if not files:
+        logging.warning("No files to merge.")
+        return
+
+    logging.info(f"Merging {len(files)} files into {output_path}")
+
+    try:
+        import pickle
+
+        # Load the first file to initialize the merged accumulator
+        with open(files[0], 'rb') as f:
+            merged_accumulator = pickle.load(f)
+
+        # Loop over the rest of the files and add them to the merged accumulator
+        for file_path in files[1:]:
+            with open(file_path, 'rb') as f:
+                accumulator = pickle.load(f)
+            # The loaded objects are coffea accumulators, so they support the `add` operation.
+            if isinstance(merged_accumulator, dict) and isinstance(accumulator, dict):
+                # Custom merging for dictionaries of histograms
+                for key, value in accumulator.items():
+                    if key in merged_accumulator and hasattr(merged_accumulator[key], 'add'):
+                        merged_accumulator[key].add(value)
+                    else:
+                        merged_accumulator[key] = value
+            elif hasattr(merged_accumulator, 'add'):
+                 merged_accumulator.add(accumulator)
+            else:
+                raise TypeError(f"Unsupported accumulator type for merging: {type(merged_accumulator)}")
+
+
+        # Save the merged accumulator
+        with open(output_path, 'wb') as f:
+            pickle.dump(merged_accumulator, f)
+
+        logging.info(f"Successfully merged results to {output_path}")
+
+    except Exception as e:
+        logging.error(f"Error merging files: {e}")
+        raise
+    finally:
+        # Clean up temporary files
+        import os
+        for file_path in files:
+            try:
+                os.remove(file_path)
+                logging.debug(f"Removed temporary file: {file_path}")
+            except OSError as e:
+                logging.error(f"Error removing temporary file {file_path}: {e}")
+
+
 def run_analyzer(args):
     """Run multi-region analysis."""
     logging.info("Running multi-region analysis...")
-
-    # Load configuration
+    
     config = load_config(args.config)
-
-    # Initialize analyzer
     analyzer = DarkBottomLineAnalyzer(config, args.regions_config)
 
     try:
         import uproot
         import awkward as ak
-
-        logging.info(f"Loading events from {args.input}")
-        with uproot.open(args.input) as f:
-            events = f["Events"].arrays()
-
-        # Limit events if specified
-        if args.max_events and len(events) > args.max_events:
-            events = events[:args.max_events]
-            logging.info(f"Limited to {args.max_events} events")
-
-        logging.info(f"Loaded {len(events)} events")
-
-        # Process events through regions
-        results = analyzer.process(events)
-
-        # Save results
         import os
-        os.makedirs(os.path.dirname(args.output), exist_ok=True)
-        analyzer.accumulator = results
-        analyzer.save_results(args.output)
+        
+        is_txt_input = len(args.input) == 1 and args.input[0].endswith(".txt")
+        input_files = _get_input_files(args.input)
+
+        if is_txt_input and len(input_files) > 1:
+            logging.info("Processing multiple files from .txt file iteratively.")
+            temp_files = []
+            output_dir = os.path.dirname(args.output)
+            os.makedirs(output_dir, exist_ok=True)
+            
+            for i, file_path in enumerate(input_files):
+                logging.info(f"Processing file {i+1}/{len(input_files)}: {file_path}")
+                temp_output_path = os.path.join(output_dir, f"temp_{i}.pkl")
+                temp_files.append(temp_output_path)
+
+                events = uproot.open(f"{file_path}:Events")
+
+                if args.max_events:
+                    events = events.arrays(entry_stop=args.max_events)
+                else:
+                    events = events.arrays()
+                
+                events = ak.Array(events)
+
+                logging.info(f"Loaded {len(events)} events")
+                
+                results = analyzer.process(events, event_selection_output=None) # No event selection output for partial files
+                
+                analyzer.accumulator = results
+                analyzer.save_results(temp_output_path)
+
+            _merge_pickle_outputs(temp_files, args.output)
+
+        else:
+            logging.info(f"Loading events from {len(input_files)} files")
+            events = uproot.concatenate([f"{path}:Events" for path in input_files])
+
+            if args.max_events and len(events) > args.max_events:
+                events = events[:args.max_events]
+                logging.info(f"Limited to {args.max_events} events")
+
+            logging.info(f"Loaded {len(events)} events")
+            
+            results = analyzer.process(events, event_selection_output=args.event_selection_output)
+            
+            os.makedirs(os.path.dirname(args.output), exist_ok=True)
+            analyzer.accumulator = results
+            analyzer.save_results(args.output)
 
     except Exception as e:
         logging.error(f"Error in multi-region analysis: {e}")
@@ -130,8 +220,8 @@ def train_dnn(args):
     trainer = DNNTrainer(args.config)
 
     # Load data
-    signal_files = args.signal_files
-    background_files = args.background_files
+    signal_files = _get_input_files(args.signal)
+    background_files = _get_input_files(args.background)
 
     features, labels, masses = trainer.load_data(signal_files, background_files)
 
@@ -226,7 +316,7 @@ def make_stacked_plots(args):
     signal_file = args.signal
     output = args.output
     variable = args.variable
-    xlabel = args.xlabel
+    region = args.region
     title_tag = args.title
 
     # Run with multi-format saving
@@ -236,7 +326,7 @@ def make_stacked_plots(args):
         signal_file=signal_file,
         output_path=output,
         variable=variable,
-        xlabel=xlabel,
+        region=region,
         title_tag=title_tag,
         version=version,
         formats=None  # All formats generated automatically
@@ -352,8 +442,9 @@ Examples:
     # Run command
     run_parser = subparsers.add_parser("run", help="Run basic analysis")
     run_parser.add_argument("--config", required=True, help="Configuration file")
-    run_parser.add_argument("--input", required=True, help="Input file")
+    run_parser.add_argument("--input", nargs="+", required=True, help="Input file(s), can be a single .txt file listing paths")
     run_parser.add_argument("--output", required=True, help="Output file")
+    run_parser.add_argument("--event-selection-output", help="Path to save events that pass event-level selection (optional)")
     run_parser.add_argument("--executor", choices=["iterative", "futures", "dask"],
                            default="iterative", help="Execution backend")
     run_parser.add_argument("--workers", type=int, default=4, help="Number of workers")
@@ -364,8 +455,9 @@ Examples:
     analyze_parser = subparsers.add_parser("analyze", help="Run multi-region analysis")
     analyze_parser.add_argument("--config", required=True, help="Base configuration file")
     analyze_parser.add_argument("--regions-config", required=True, help="Regions configuration file")
-    analyze_parser.add_argument("--input", required=True, help="Input file")
+    analyze_parser.add_argument("--input", nargs="+", required=True, help="Input file(s), can be a single .txt file listing paths")
     analyze_parser.add_argument("--output", required=True, help="Output file")
+    analyze_parser.add_argument("--event-selection-output", help="Path to save events that pass event-level selection (optional)")
     analyze_parser.add_argument("--executor", choices=["iterative", "futures", "dask"],
                                default="iterative", help="Execution backend")
     analyze_parser.add_argument("--workers", type=int, default=4, help="Number of workers")
@@ -375,8 +467,8 @@ Examples:
     # Train DNN command
     train_dnn_parser = subparsers.add_parser("train-dnn", help="Train DNN model")
     train_dnn_parser.add_argument("--config", required=True, help="DNN configuration file")
-    train_dnn_parser.add_argument("--signal", nargs="+", required=True, help="Signal files")
-    train_dnn_parser.add_argument("--background", nargs="+", required=True, help="Background files")
+    train_dnn_parser.add_argument("--signal", nargs="+", required=True, help="Signal files, can be a single .txt file listing paths")
+    train_dnn_parser.add_argument("--background", nargs="+", required=True, help="Background files, can be a single .txt file listing paths")
     train_dnn_parser.add_argument("--output", required=True, help="Output model file")
     train_dnn_parser.add_argument("--plot-history", action="store_true", help="Plot training history")
     train_dnn_parser.set_defaults(func=train_dnn)
@@ -401,7 +493,7 @@ Examples:
     stacked_parser.add_argument("--signal", help="Signal results pickle path")
     stacked_parser.add_argument("--output", required=True, help="Output plot file (e.g. outputs/plots/stacked_met.pdf)")
     stacked_parser.add_argument("--variable", default="met", help="Variable key to plot (default: met)")
-    stacked_parser.add_argument("--xlabel", default="MET [GeV]", help="X-axis label")
+    stacked_parser.add_argument("--region", default="1b:SR", help="Analysis region to plot (default: 1b:SR)")
     stacked_parser.add_argument("--title", default="CMS Preliminary  (13.6 TeV, 2023)", help="Title tag with CMS text")
     stacked_parser.add_argument("--version", help="Version string (default: auto-generate timestamp)")
     stacked_parser.add_argument("--plot-config", help="Path to plotting configuration YAML file (default: configs/plotting.yaml)")

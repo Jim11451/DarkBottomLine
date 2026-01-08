@@ -115,9 +115,15 @@ class Region:
         # Special variables
         if var == "MET":
             try:
-                return ak.fill_none(events["PFMET_pt"], 0.0)
+                if "PFMET_pt" in events.fields:
+                    return ak.fill_none(events["PFMET_pt"], 0.0)
+                else:
+                    return ak.fill_none(events["MET_pt"], 0.0)
             except Exception:
-                return events["PFMET_pt"]
+                if "PFMET_pt" in events.fields:
+                    return events["PFMET_pt"]
+                else:
+                    return events["MET_pt"]
         if var == "Nbjets":
             return ak.num(objects.get("bjets", ak.Array([])), axis=1)
         if var == "Njets" or var == "NjetsMin":
@@ -147,8 +153,8 @@ class Region:
             return n_jets - n_bjets
         if var == "Recoil":
             # Recoil = | -( pTmiss + sum pT(leptons) ) |
-            met_pt = events["PFMET_pt"]
-            met_phi = events["PFMET_phi"]
+            met_pt = events["PFMET_pt"] if "PFMET_pt" in events.fields else events["MET_pt"]
+            met_phi = events["PFMET_phi"] if "PFMET_phi" in events.fields else events["MET_phi"]
 
             # Get lepton momenta
             muons = objects.get("muons", ak.Array([]))
@@ -169,31 +175,36 @@ class Region:
             return ak.fill_none(recoil, 0.0)
         if var == "MT":
             # Transverse mass = sqrt(2 * pT_lepton * MET * (1 - cos(Δφ)))
-            met_pt = events["PFMET_pt"]
-            met_phi = events["PFMET_phi"]
+            met_pt = events["PFMET_pt"] if "PFMET_pt" in events.fields else events["MET_pt"]
+            met_phi = events["PFMET_phi"] if "PFMET_phi" in events.fields else events["MET_phi"]
 
-            # Get leading lepton
             muons = objects.get("muons", ak.Array([]))
             electrons = objects.get("electrons", ak.Array([]))
 
             mt = ak.zeros_like(met_pt)
 
-            # Check for single muon
-            if len(ak.flatten(muons)) > 0:
-                muon_pt = ak.max(muons.pt, axis=1)
-                muon_phi = muons.phi[ak.argmax(muons.pt, axis=1)]
-                delta_phi = np.abs(muon_phi - met_phi)
-                delta_phi = ak.where(delta_phi > np.pi, 2*np.pi - delta_phi, delta_phi)
-                mt = np.sqrt(2 * muon_pt * met_pt * (1 - np.cos(delta_phi)))
+            # Muon MT
+            has_muons = ak.num(muons) > 0
+            leading_muon = ak.firsts(muons[ak.argsort(muons.pt, ascending=False, axis=1)])
+            muon_pt = leading_muon.pt
+            muon_phi = leading_muon.phi
+            delta_phi_mu = abs(muon_phi - met_phi)
+            delta_phi_mu = ak.where(delta_phi_mu > np.pi, 2 * np.pi - delta_phi_mu, delta_phi_mu)
+            mt_mu = np.sqrt(2 * muon_pt * met_pt * (1 - np.cos(delta_phi_mu)))
+            
+            mt = ak.where(has_muons, mt_mu, mt)
 
-            # Check for single electron
-            elif len(ak.flatten(electrons)) > 0:
-                ele_pt = ak.max(electrons.pt, axis=1)
-                ele_phi = electrons.phi[ak.argmax(electrons.pt, axis=1)]
-                delta_phi = np.abs(ele_phi - met_phi)
-                delta_phi = ak.where(delta_phi > np.pi, 2*np.pi - delta_phi, delta_phi)
-                mt = np.sqrt(2 * ele_pt * met_pt * (1 - np.cos(delta_phi)))
+            # Electron MT for events without muons
+            has_electrons = ak.num(electrons) > 0
+            leading_electron = ak.firsts(electrons[ak.argsort(electrons.pt, ascending=False, axis=1)])
+            ele_pt = leading_electron.pt
+            ele_phi = leading_electron.phi
+            delta_phi_el = abs(ele_phi - met_phi)
+            delta_phi_el = ak.where(delta_phi_el > np.pi, 2 * np.pi - delta_phi_el, delta_phi_el)
+            mt_el = np.sqrt(2 * ele_pt * met_pt * (1 - np.cos(delta_phi_el)))
 
+            mt = ak.where(~has_muons & has_electrons, mt_el, mt)
+            
             return ak.fill_none(mt, 0.0)
         if var in ("Mll", "MllMin", "MllMax"):
             # Simplified dilepton invariant mass calculation
@@ -207,7 +218,7 @@ class Region:
             return ak.fill_none(mll, 0.0)
         if var == "DeltaPhi":
             jets = objects.get("jets", ak.Array([]))
-            met_phi = events["PFMET_phi"]
+            met_phi = events["PFMET_phi"] if "PFMET_phi" in events.fields else events["MET_phi"]
 
             # Check if jets array is empty or has no structure
             if len(ak.flatten(jets)) == 0 or len(jets) == 0:
@@ -237,7 +248,7 @@ class Region:
                 return ak.max(all_leptons.pt, axis=1)
         if var == "metQuality":
             # MET Quality = (pfMET - caloMET) / Recoil
-            pf_met = events["PFMET_pt"]
+            pf_met = events["PFMET_pt"] if "PFMET_pt" in events.fields else events["MET_pt"]
             calo_met = events.get("CaloMET_pt", pf_met)  # Fallback to pfMET if caloMET not available
             recoil = self._get_variable_value(events, objects, "Recoil")
 
