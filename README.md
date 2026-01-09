@@ -67,10 +67,10 @@ cd DarkBottomLine
 
 3. Check the pre-installed packages that come with CMSSW release:
 ```bash
-python check_requirements.py
+python3 check_requirements.py
 
 # To install the missing packages
-python check_requirements.py --install --local-dir ./.local
+python3 check_requirements.py --install --local-dir ./.local
 ```
 
 4. Run final installation script:
