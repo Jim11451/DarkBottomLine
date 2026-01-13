@@ -110,10 +110,22 @@ def install_missing_packages(requirements_path, local_dir, missing_lines):
         print(f"  3. Reinstall Python")
         return False
 
+    # Set environment variables to force installation to target directory only
+    import os
+    env = os.environ.copy()
+    # Set PYTHONUSERBASE to local_dir to prevent any fallback to ~/.local
+    env['PYTHONUSERBASE'] = str(local_dir.absolute())
+    # Unset PYTHONHOME to prevent interference
+    env.pop('PYTHONHOME', None)
+
     # Install packages (suppress all output)
+    # Add --no-user to prevent any user site-packages installation
+    # Add --no-cache-dir to avoid cache issues
     cmd = [
         sys.executable, "-m", "pip", "install",
         "--target", str(local_dir.absolute()),
+        "--no-user",  # Prevent installation to user site-packages
+        "--no-cache-dir",  # Avoid cache issues
         "-r", str(temp_file),
         "--quiet",
         "--disable-pip-version-check",
@@ -123,7 +135,8 @@ def install_missing_packages(requirements_path, local_dir, missing_lines):
     result = subprocess.run(
         cmd,
         stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE  # Capture stderr to show if there's an error
+        stderr=subprocess.PIPE,  # Capture stderr to show if there's an error
+        env=env  # Use modified environment
     )
 
     # Clean up
