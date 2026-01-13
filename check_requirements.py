@@ -75,17 +75,19 @@ def parse_requirements(requirements_path):
                     requirements.append((base_package, line, version_part))
     return requirements
 
-
-def install_missing_packages(requirements_path, local_dir, missing_lines):
+def install_missing_packages(local_dir, missing_lines):
     """Install missing packages locally."""
     local_dir = Path(local_dir)
     local_dir.mkdir(parents=True, exist_ok=True)
 
-    # Create temp file with only missing packages
-    temp_file = local_dir / ".temp_requirements.txt"
-    with open(temp_file, 'w') as f:
-        for line in missing_lines:
-            f.write(line + "\n")
+    # Set environment variables to force installation to target directory only
+    import os
+    env = os.environ.copy()
+    # Set PYTHONUSERBASE to local_dir to ensure both packages AND scripts go to cwd .local
+    # This is better than --target because --target doesn't install scripts to the target
+    env['PYTHONUSERBASE'] = str(local_dir.absolute())
+    # Unset PYTHONHOME to prevent interference
+    env.pop('PYTHONHOME', None)
 
     # Verify Python and pip are working before attempting installation
     try:
@@ -110,66 +112,57 @@ def install_missing_packages(requirements_path, local_dir, missing_lines):
         print(f"  3. Reinstall Python")
         return False
 
-    # Set environment variables to force installation to target directory only
-    import os
-    env = os.environ.copy()
-    # Set PYTHONUSERBASE to local_dir to prevent any fallback to ~/.local
-    env['PYTHONUSERBASE'] = str(local_dir.absolute())
-    # Unset PYTHONHOME to prevent interference
-    env.pop('PYTHONHOME', None)
+    # Install packages individually to ensure only missing packages are installed
+    # Using --user with PYTHONUSERBASE ensures both packages and scripts go to cwd .local
+    failed_packages = []
+    for req_line in missing_lines:
+        req_line = req_line.strip()
+        if not req_line:
+            continue
 
-    # Install packages (suppress all output)
-    # Add --no-user to prevent any user site-packages installation
-    # Add --no-cache-dir to avoid cache issues
-    cmd = [
-        sys.executable, "-m", "pip", "install",
-        "--target", str(local_dir.absolute()),
-        "--no-user",  # Prevent installation to user site-packages
-        "--no-cache-dir",  # Avoid cache issues
-        "-r", str(temp_file),
-        "--quiet",
-        "--disable-pip-version-check",
-        "--no-warn-script-location"
-    ]
+        # Extract package name for display
+        pkg_match = re.match(r'^([a-zA-Z0-9_-]+(?:\[[^\]]+\])?)', req_line)
+        pkg_name = pkg_match.group(1) if pkg_match else req_line
 
-    result = subprocess.run(
-        cmd,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,  # Capture stderr to show if there's an error
-        env=env  # Use modified environment
-    )
+        # Install package individually using --user with PYTHONUSERBASE
+        # This ensures packages go to local_dir/lib/pythonX.X/site-packages
+        # and scripts go to local_dir/bin
+        cmd = [
+            sys.executable, "-m", "pip", "install",
+            "--user",  # Use --user with PYTHONUSERBASE to install to local_dir
+            "--no-cache-dir",  # Avoid cache issues
+            "--upgrade-strategy", "only-if-needed",  # Only upgrade if needed
+            req_line,  # Install this specific package (and its dependencies)
+            "--quiet",
+            "--disable-pip-version-check",
+            "--no-warn-script-location"  # Suppress warnings since we control the location
+        ]
 
-    # Clean up
-    if temp_file.exists():
-        temp_file.unlink()
+        result = subprocess.run(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,  # Capture stderr to show if there's an error
+            env=env  # Use modified environment with PYTHONUSERBASE
+        )
 
-    if result.returncode == 0:
-        # Add to sys.path
-        local_dir_str = str(local_dir.absolute())
-        if local_dir_str not in sys.path:
-            sys.path.insert(0, local_dir_str)
-        return True
+        if result.returncode != 0:
+            error_msg = result.stderr.decode('utf-8', errors='ignore') if result.stderr else "Unknown error"
+            print(f"⚠ Failed to install {pkg_name}: {error_msg[:200]}")
+            failed_packages.append((pkg_name, req_line))
+        else:
+            print(f"✓ Installed {pkg_name}")
 
-    # If installation failed, show error details
-    error_msg = result.stderr.decode('utf-8', errors='ignore') if result.stderr else "Unknown error"
-    print(f"Installation failed with exit code {result.returncode}")
+    if failed_packages:
+        print(f"\n✗ Failed to install {len(failed_packages)} package(s):")
+        for pkg_name, req_line in failed_packages:
+            print(f"  - {pkg_name}")
+        return False
 
-    # Check for common Python corruption errors
-    if "_posixsubprocess" in error_msg or "msvcrt" in error_msg or "ModuleNotFoundError" in error_msg:
-        print(f"\nError: Your Python installation appears to be corrupted.")
-        print(f"Python executable: {sys.executable}")
-        print(f"\nSolutions:")
-        print(f"  1. Use a virtual environment:")
-        print(f"     python3 -m venv venv")
-        print(f"     source venv/bin/activate")
-        print(f"     python check_requirements.py --install")
-        print(f"  2. Use conda/miniforge:")
-        print(f"     conda create -n darkbottomline python=3.9")
-        print(f"     conda activate darkbottomline")
-        print(f"  3. Reinstall Python or use a different Python installation")
-
-    return False
-
+    # Add to sys.path
+    local_dir_str = str(local_dir.absolute())
+    if local_dir_str not in sys.path:
+        sys.path.insert(0, local_dir_str)
+    return True
 
 def main():
     parser = argparse.ArgumentParser(description="Check and install packages from requirements.txt")
@@ -252,7 +245,7 @@ def main():
 
     print(f"Installing {missing_count} missing packages...")
     missing_lines = [req_line for _, req_line, _ in missing]
-    if install_missing_packages(requirements_path, args.local_dir, missing_lines):
+    if install_missing_packages(args.local_dir, missing_lines):
         local_packages_path = Path(args.local_dir).absolute()
         print(f"✓ Packages installed to: {local_packages_path}")
         print(f"\nTo use these packages, add to your Python path:")
@@ -266,3 +259,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+ 
