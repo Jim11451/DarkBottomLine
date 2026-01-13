@@ -10,6 +10,10 @@ set -e  # Exit on error
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOCAL_DIR="${SCRIPT_DIR}/.local"
 
+# Get Python version for site-packages path
+PYTHON_VERSION=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+SITE_PACKAGES_DIR="${LOCAL_DIR}/lib/python${PYTHON_VERSION}/site-packages"
+
 echo "=========================================="
 echo "DarkBottomLine Installation for lxplus"
 echo "=========================================="
@@ -18,11 +22,19 @@ echo "Note: Make sure dependencies are installed first:"
 echo "  python3 check_requirements.py --install --local-dir ./.local"
 echo ""
 
-# Add .local to PYTHONPATH if it exists (packages installed by check_requirements.py)
-if [ -d "$LOCAL_DIR" ]; then
-    export PYTHONPATH="${LOCAL_DIR}:${PYTHONPATH}"
-    echo "✓ Found .local directory, added to PYTHONPATH"
-    echo ""
+# Add .local site-packages to PYTHONPATH if it exists (packages installed by check_requirements.py)
+# When using --user with PYTHONUSERBASE, packages go to lib/pythonX.X/site-packages
+if [ -d "$SITE_PACKAGES_DIR" ]; then
+    if [[ ":$PYTHONPATH:" != *":$SITE_PACKAGES_DIR:"* ]]; then
+        export PYTHONPATH="${SITE_PACKAGES_DIR}:${PYTHONPATH}"
+        echo "✓ Found .local site-packages directory, added to PYTHONPATH"
+    fi
+elif [ -d "$LOCAL_DIR" ]; then
+    # Fallback to base directory if site-packages doesn't exist yet
+    if [[ ":$PYTHONPATH:" != *":${LOCAL_DIR}:"* ]]; then
+        export PYTHONPATH="${LOCAL_DIR}:${PYTHONPATH}"
+        echo "✓ Found .local directory, added to PYTHONPATH"
+    fi
 fi
 # Install the package in development mode
 echo "Installing DarkBottomLine repository..."
@@ -33,7 +45,10 @@ echo ""
 # Temporarily remove .local from PYTHONPATH to avoid conflicts during installation
 # We'll add it back after
 OLD_PYTHONPATH="$PYTHONPATH"
-if [[ "$PYTHONPATH" == *"${LOCAL_DIR}"* ]]; then
+if [[ "$PYTHONPATH" == *"${SITE_PACKAGES_DIR}"* ]]; then
+    # Remove site-packages from PYTHONPATH temporarily
+    export PYTHONPATH=$(echo "$PYTHONPATH" | tr ':' '\n' | grep -v "^${SITE_PACKAGES_DIR}$" | tr '\n' ':' | sed 's/:$//')
+elif [[ "$PYTHONPATH" == *"${LOCAL_DIR}"* ]]; then
     # Remove .local from PYTHONPATH temporarily
     export PYTHONPATH=$(echo "$PYTHONPATH" | tr ':' '\n' | grep -v "^${LOCAL_DIR}$" | tr '\n' ':' | sed 's/:$//')
 fi
@@ -53,6 +68,14 @@ if pip3 install -e . --user --no-cache-dir; then
 
     # Restore PYTHONPATH
     export PYTHONPATH="$OLD_PYTHONPATH"
+
+    # Make sure site-packages directory is in PYTHONPATH
+    if [ -d "$SITE_PACKAGES_DIR" ]; then
+        if [[ ":$PYTHONPATH:" != *":$SITE_PACKAGES_DIR:"* ]]; then
+            export PYTHONPATH="${SITE_PACKAGES_DIR}:${PYTHONPATH}"
+        fi
+    fi
+
     unset PYTHONUSERBASE
 
     # Add .local/bin to PATH if not already there (for darkbottomline command)
@@ -73,6 +96,7 @@ if pip3 install -e . --user --no-cache-dir; then
         echo "⚠ Package installed but import test failed"
         echo "  Make sure .local is in your PYTHONPATH:"
         echo "  export PYTHONPATH=\"${LOCAL_DIR}:\$PYTHONPATH\""
+        echo "  export PYTHONPATH=\"${SITE_PACKAGES_DIR}:\$PYTHONPATH\""
     fi
 
     # Check if command is available
@@ -91,8 +115,9 @@ if pip3 install -e . --user --no-cache-dir; then
     echo "=========================================="
     echo ""
     echo "To use DarkBottomLine:"
-    echo "  1. Make sure .local is in PYTHONPATH:"
-    echo "     export PYTHONPATH=\"${LOCAL_DIR}:\$PYTHONPATH\""
+    echo "  1. Make sure .local site-packages is in PYTHONPATH:"
+    echo "     PYTHON_VERSION=\$(python3 -c \"import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')\")"
+    echo "     export PYTHONPATH=\"\${LOCAL_DIR}/lib/python\${PYTHON_VERSION}/site-packages:\$PYTHONPATH\""
     echo ""
     echo "  2. Make sure ${LOCAL_BIN_DIR} is in PATH:"
     echo "     export PATH=\"${LOCAL_BIN_DIR}:\$PATH\""
