@@ -79,11 +79,6 @@ chmod +x install_lxplus.sh
 ./install_lxplus.sh
 ```
 
-5. Export environment paths:
-```bash
-export PATH="$HOME/.local/bin:$PATH"
-export PYTHONPATH=<full_path>/CMSSW_15_0_17/src/DarkBottomLine/.local:$PYTHONPATH
-```
 
 #### Condor Setup
 ```bash
