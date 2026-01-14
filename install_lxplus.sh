@@ -62,7 +62,8 @@ mkdir -p "${LOCAL_DIR}"
 export PYTHONUSERBASE="${LOCAL_DIR}"
 unset PYTHONHOME  # Prevent interference
 
-if pip3 install -e . --user --no-cache-dir; then
+# if pip3 install -e . --user --no-cache-dir; then
+if pip3 install -e . --prefix ${LOCAL_DIR} --no-cache-dir; then
     echo "✓ DarkBottomLine repository installed successfully!"
     echo ""
 
