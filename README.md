@@ -75,7 +75,10 @@ python3 check_requirements.py
 
 # To install the missing packages
 python3 check_requirements.py --install --local-dir ./.local
+
+# Please add the suggested PYTHONPATH in the output of the above installation to your Python path
 ```
+
 
 4. Run final installation script:
 ```bash
