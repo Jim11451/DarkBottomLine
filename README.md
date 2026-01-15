@@ -52,7 +52,11 @@ pip install -e .
 
 ### Lxplus
 
-1. Load the CMSSW release:
+1. Source the following file
+```bash
+source /cvmfs/sft.cern.ch/lcg/views/LCG_105/x86_64-el9-gcc11-opt/setup.sh
+```
+ - If above method does not work then try to install and load the CMSSW release:
 ```bash
 cmsrel CMSSW_15_0_17
 cd CMSSW_15_0_17/src
