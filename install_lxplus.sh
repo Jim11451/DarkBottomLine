@@ -115,21 +115,42 @@ if pip3 install -e . --prefix ${LOCAL_DIR} --no-cache-dir --no-deps; then
     echo "Installation Complete!"
     echo "=========================================="
     echo ""
-    echo "To use DarkBottomLine:"
-    echo "  1. Make sure .local site-packages is in PYTHONPATH:"
-    echo "     PYTHON_VERSION=\$(python3 -c \"import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')\")"
-    echo "     export PYTHONPATH=\"${LOCAL_DIR}/lib/python${PYTHON_VERSION}/site-packages:\$PYTHONPATH\""
+
+    # Export paths for current session
+    echo "Setting up environment for current session..."
+    PYTHON_VERSION=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+    SITE_PACKAGES_PATH="${LOCAL_DIR}/lib/python${PYTHON_VERSION}/site-packages"
+
+    # Export PYTHONPATH
+    if [ -d "$SITE_PACKAGES_PATH" ]; then
+        if [[ ":$PYTHONPATH:" != *":$SITE_PACKAGES_PATH:"* ]]; then
+            export PYTHONPATH="${SITE_PACKAGES_PATH}:${PYTHONPATH}"
+            echo "✓ Exported PYTHONPATH=${SITE_PACKAGES_PATH}:${PYTHONPATH}"
+        fi
+    fi
+
+    # Export PATH for darkbottomline command
+    if [ -d "$LOCAL_BIN_DIR" ] && [[ ":$PATH:" != *":$LOCAL_BIN_DIR:"* ]]; then
+        export PATH="${LOCAL_BIN_DIR}:${PATH}"
+        echo "✓ Exported PATH=${LOCAL_BIN_DIR}:${PATH}"
+    fi
+
     echo ""
-    echo "  2. Make sure ${LOCAL_BIN_DIR} is in PATH:"
-    echo "     export PATH=\"${LOCAL_BIN_DIR}:\$PATH\""
+    echo "To use DarkBottomLine in this session:"
+    echo "  darkbottomline --help"
+    echo "  # Or:"
+    echo "  python3 -m darkbottomline.cli --help"
     echo ""
-    echo "  3. Run the framework:"
-    echo "     darkbottomline --help"
-    echo "     # Or if command not found:"
-    echo "     python3 -m darkbottomline.cli --help"
+    echo "To use DarkBottomLine in future sessions, export these paths:"
+    echo "  PYTHON_VERSION=\$(python3 -c \"import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')\")"
+    echo "  export PYTHONPATH=\"${LOCAL_DIR}/lib/python\${PYTHON_VERSION}/site-packages:\$PYTHONPATH\""
+    echo "  export PATH=\"${LOCAL_BIN_DIR}:\$PATH\""
     echo ""
-    echo "  4. Or use as a Python module:"
-    echo "     python3 -c \"from darkbottomline import DarkBottomLineProcessor\""
+    echo "Or add to your ~/.bashrc or ~/.bash_profile:"
+    echo "  # DarkBottomLine paths"
+    echo "  PYTHON_VERSION=\$(python3 -c \"import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')\")"
+    echo "  export PYTHONPATH=\"${LOCAL_DIR}/lib/python\${PYTHON_VERSION}/site-packages:\$PYTHONPATH\""
+    echo "  export PATH=\"${LOCAL_BIN_DIR}:\$PATH\""
     echo ""
 else
     # Restore PYTHONPATH and unset PYTHONUSERBASE
