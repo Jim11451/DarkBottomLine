@@ -63,7 +63,7 @@ export PYTHONUSERBASE="${LOCAL_DIR}"
 unset PYTHONHOME  # Prevent interference
 
 # if pip3 install -e . --user --no-cache-dir; then
-if pip3 install -e . --prefix ${LOCAL_DIR} --no-cache-dir; then
+if pip3 install -e . --prefix ${LOCAL_DIR} --no-cache-dir --no-deps; then
     echo "✓ DarkBottomLine repository installed successfully!"
     echo ""
 
@@ -118,7 +118,7 @@ if pip3 install -e . --prefix ${LOCAL_DIR} --no-cache-dir; then
     echo "To use DarkBottomLine:"
     echo "  1. Make sure .local site-packages is in PYTHONPATH:"
     echo "     PYTHON_VERSION=\$(python3 -c \"import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')\")"
-    echo "     export PYTHONPATH=\"\${LOCAL_DIR}/lib/python\${PYTHON_VERSION}/site-packages:\$PYTHONPATH\""
+    echo "     export PYTHONPATH=\"${LOCAL_DIR}/lib/python${PYTHON_VERSION}/site-packages:\$PYTHONPATH\""
     echo ""
     echo "  2. Make sure ${LOCAL_BIN_DIR} is in PATH:"
     echo "     export PATH=\"${LOCAL_BIN_DIR}:\$PATH\""
