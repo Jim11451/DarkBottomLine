@@ -87,6 +87,44 @@ chmod +x install_lxplus.sh
 ```
 
 
+#### Environment Setup (Lxplus)
+
+After installation, you need to set up your environment before using DarkBottomLine. The `install_lxplus.sh` script automatically sets up the environment for the current session, but for future logins you'll need to use the `start.sh` script.
+
+##### First-time Installation (Automatic Setup)
+
+When you run `install_lxplus.sh`, it automatically:
+- Sets up `PYTHONPATH` to include the installed packages
+- Adds the `darkbottomline` command to your `PATH`
+- Exports these paths for the current session
+
+After running `install_lxplus.sh`, you can immediately use DarkBottomLine in that session (after sourcing LCG environment).
+
+##### Using DarkBottomLine in Future Sessions
+
+Every time you start a new shell session on lxplus, you need to:
+
+1. **Source LCG environment first** (critical):
+```bash
+   source-lcg
+   # Or if you don't have the function:
+   source /cvmfs/sft.cern.ch/lcg/views/LCG_105/x86_64-el9-gcc11-opt/setup.sh
+   ```
+2. Source the start.sh script to set up DarkBottomLine environment:
+```bash
+   cd /path/to/DarkBottomLine
+   source start.sh
+   # Or:
+   . start.sh
+```
+3. Verify the setup:
+```bash
+   darkbottomline --help
+   # Or:
+   python3 -c "from darkbottomline import DarkBottomLineProcessor; print('✓ Import successful')"
+``` 
+   
+   
 #### Condor Setup
 ```bash
 cd condorJobs
