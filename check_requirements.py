@@ -129,7 +129,7 @@ def install_missing_packages(local_dir, missing_lines):
         # and scripts go to local_dir/bin
         cmd = [
             sys.executable, "-m", "pip", "install",
-            "--user",  # Use --user with PYTHONUSERBASE to install to local_dir
+            "--prefix", str(local_dir.absolute()),  # Use --prefix instead of --user
             "--no-cache-dir",  # Avoid cache issues
             "--upgrade-strategy", "only-if-needed",  # Only upgrade if needed
             req_line,  # Install this specific package (and its dependencies)
@@ -259,4 +259,3 @@ def main():
 
 if __name__ == "__main__":
     main()
- 
