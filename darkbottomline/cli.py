@@ -1,5 +1,6 @@
 """
 Command-line interface for DarkBottomLine framework.
+root single transfer default = 16MB
 """
 
 import argparse
@@ -56,12 +57,13 @@ def run_analysis(args):
     # Load events from ROOT file
     try:
         import uproot
+        uproot.source.xrootd.XRootDSource.defaults["limitbytes"] = 16 * 1024 * 1024  # 16 MB
         import awkward as ak
 
         input_files = _get_input_files(args.input)
         logging.info(f"Loading events from {str(input_files)} files")
 
-        events = uproot.concatenate([f"{path}:Events" for path in input_files])
+        events = uproot.concatenate([f"{path}:Events" for path in input_files], timeout=120)
 
         # Limit events if specified
         if args.max_events and len(events) > args.max_events:
@@ -154,6 +156,7 @@ def run_analyzer(args):
 
     try:
         import uproot
+        uproot.source.xrootd.XRootDSource.defaults["limitbytes"] = 16 * 1024 * 1024  # 16 MB
         import awkward as ak
         import os
 
@@ -171,7 +174,7 @@ def run_analyzer(args):
                 temp_output_path = os.path.join(output_dir, f"temp_{i}.pkl")
                 temp_files.append(temp_output_path)
 
-                events = uproot.open(f"{file_path}:Events")
+                events = uproot.open(f"{file_path}:Events", timeout=120)
 
                 if args.max_events:
                     events = events.arrays(entry_stop=args.max_events)
@@ -191,7 +194,7 @@ def run_analyzer(args):
 
         else:
             logging.info(f"Loading events from {len(input_files)} files")
-            events = uproot.concatenate([f"{path}:Events" for path in input_files])
+            events = uproot.concatenate([f"{path}:Events" for path in input_files], timeout=120)
 
             if args.max_events and len(events) > args.max_events:
                 events = events[:args.max_events]
