@@ -295,7 +295,6 @@ Examples:
     
     for log_dir in [logs_dir, logs_output_dir, logs_error_dir]:
         log_dir.mkdir(parents=True, exist_ok=True)
-        print(f"✓ Created/verified directory: {log_dir}")
 
     # Find sample files
     sample_files = find_sample_files(input_dir)
@@ -308,6 +307,7 @@ Examples:
     print("DarkBottomLine Condor Job Submission")
     print("="*60)
     print(f"Input directory: {input_dir}")
+    print(f"Log directories: {logs_dir}/")
     print(f"Found {len(sample_files)} sample file(s):")
     for sample in sample_files:
         num_files = count_files_in_sample(sample)
