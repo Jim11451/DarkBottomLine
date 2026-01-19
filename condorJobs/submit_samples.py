@@ -296,6 +296,37 @@ Examples:
     for log_dir in [logs_dir, logs_output_dir, logs_error_dir]:
         log_dir.mkdir(parents=True, exist_ok=True)
 
+    # Check for existing log files and prompt to delete
+    existing_logs = []
+    for log_dir in [logs_output_dir, logs_error_dir, logs_dir]:
+        if log_dir.exists():
+            # Find all log files (dbl.*.out, dbl.*.err, dbl.*.log)
+            for log_file in log_dir.glob('dbl.*'):
+                if log_file.is_file():
+                    existing_logs.append(log_file)
+    
+    if existing_logs and not args.dry_run:
+        print(f"\n⚠  Found {len(existing_logs)} existing log file(s) from previous jobs:")
+        # Show first few files
+        for log_file in existing_logs[:5]:
+            print(f"  - {log_file}")
+        if len(existing_logs) > 5:
+            print(f"  ... and {len(existing_logs) - 5} more")
+        
+        response = input("\nDo you want to delete these log files? [y/N]: ").strip().lower()
+        if response in ['y', 'yes']:
+            deleted_count = 0
+            for log_file in existing_logs:
+                try:
+                    log_file.unlink()
+                    deleted_count += 1
+                except Exception as e:
+                    print(f"  ✗ Error deleting {log_file}: {e}")
+            print(f"✓ Deleted {deleted_count} log file(s)")
+        else:
+            print("⚠  Keeping existing log files (new logs will be appended/overwritten)")
+        print()
+
     # Find sample files
     sample_files = find_sample_files(input_dir)
 
