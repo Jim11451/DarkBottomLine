@@ -176,9 +176,9 @@ def run_analyzer(args):
 
         # Check if we should use Coffea run_uproot_job with chunk-size
         use_coffea_chunking = (
-            COFFEA_AVAILABLE and 
-            args.executor in ["futures", "dask"] and 
-            hasattr(args, 'chunk_size') and 
+            COFFEA_AVAILABLE and
+            args.executor in ["futures", "dask"] and
+            hasattr(args, 'chunk_size') and
             args.chunk_size is not None
         )
 
@@ -190,17 +190,17 @@ def run_analyzer(args):
             except ImportError:
                 logging.error("DarkBottomLineAnalyzerCoffeaProcessor not available. Coffea may not be installed.")
                 raise
-            
+
             logging.info(f"Using Coffea {args.executor} executor with chunk-size={args.chunk_size}")
-            
+
             fileset = {"dataset": input_files}
             chunksize = args.chunk_size
             maxchunks = None
             if args.max_events:
                 maxchunks = (args.max_events + chunksize - 1) // chunksize
-            
+
             coffea_analyzer = DarkBottomLineAnalyzerCoffeaProcessor(config, args.regions_config)
-            
+
             if args.executor == "futures":
                 result = run_uproot_job(
                     fileset,
@@ -227,13 +227,13 @@ def run_analyzer(args):
                     client.close()
             else:
                 raise ValueError(f"Executor {args.executor} not available or not supported")
-            
+
             # Save results
             analyzer = DarkBottomLineAnalyzer(config, args.regions_config)
             analyzer.accumulator = result
             os.makedirs(os.path.dirname(args.output), exist_ok=True)
             analyzer.save_results(args.output)
-            
+
         else:
             # Original processing without chunking
             analyzer = DarkBottomLineAnalyzer(config, args.regions_config)

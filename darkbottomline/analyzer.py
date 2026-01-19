@@ -401,7 +401,7 @@ class DarkBottomLineAnalyzer:
         for region_name, region_mask in region_masks.items():
             # Check if region mask is valid and has any passing events
             n_passing = ak.sum(region_mask) if hasattr(region_mask, '__len__') else 0
-            
+
             # Handle empty regions
             if n_passing == 0:
                 # Create empty objects for empty regions
