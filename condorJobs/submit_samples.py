@@ -61,11 +61,23 @@ def create_submit_file(
     repo_dir = condor_dir.parent  # Repository root directory
     repo_dir_abs = repo_dir.resolve()
 
+    # Build config paths relative to repository
+    # If config paths are relative, make them absolute using repo_dir
+    if not os.path.isabs(config):
+        config_path = repo_dir_abs / config
+    else:
+        config_path = Path(config)
+    
+    if not os.path.isabs(regions_config):
+        regions_config_path = repo_dir_abs / regions_config
+    else:
+        regions_config_path = Path(regions_config)
+
     # Build environment variable string
     env_parts = [
         f'DBL_REPO_DIR={repo_dir_abs}',
-        f'DBL_CONFIG={config}',
-        f'DBL_REGIONS_CONFIG={regions_config}',
+        f'DBL_CONFIG={config_path}',
+        f'DBL_REGIONS_CONFIG={regions_config_path}',
         f'DBL_BKG_FILE={sample_file}',
         f'DBL_EXECUTOR={executor}',
         f'DBL_CHUNK_SIZE={chunk_size}',
