@@ -16,6 +16,13 @@ from .regions import RegionManager
 from .histograms import HistogramManager
 from .selections import apply_selection
 
+# Try to import Coffea for processor wrapper
+try:
+    from coffea import processor
+    COFFEA_AVAILABLE = True
+except ImportError:
+    COFFEA_AVAILABLE = False
+
 
 class DarkBottomLineAnalyzer:
     """
@@ -585,3 +592,66 @@ class DarkBottomLineAnalyzer:
         with open(output_file, 'wb') as f:
             pickle.dump(self.accumulator, f)
         logging.info(f"Saved region results to {output_file}")
+
+
+# Coffea processor wrapper for analyzer compatibility
+if COFFEA_AVAILABLE:
+    class DarkBottomLineAnalyzerCoffeaProcessor(processor.ProcessorABC):
+        """
+        Coffea-compatible processor wrapper for multi-region analyzer.
+        """
+
+        def __init__(self, config: Dict[str, Any], regions_config_path: str):
+            self.config = config
+            self.regions_config_path = regions_config_path
+            self.analyzer = DarkBottomLineAnalyzer(config, regions_config_path)
+            # Initialize accumulator for Coffea
+            self.accumulator = processor.dict_accumulator({
+                "regions": processor.dict_accumulator({}),
+                "region_histograms": processor.dict_accumulator({}),
+                "region_cutflow": processor.dict_accumulator({}),
+                "region_validation": processor.dict_accumulator({}),
+                "metadata": processor.dict_accumulator({}),
+            })
+
+        def process(self, events: ak.Array) -> Dict[str, Any]:
+            """Process events using the analyzer."""
+            result = self.analyzer.process(events, event_selection_output=None)
+            # Update accumulator with results
+            if "regions" in result:
+                for key, value in result["regions"].items():
+                    if key not in self.accumulator["regions"]:
+                        self.accumulator["regions"][key] = value
+                    else:
+                        # Merge if needed
+                        if isinstance(self.accumulator["regions"][key], dict) and isinstance(value, dict):
+                            self.accumulator["regions"][key].update(value)
+            if "region_histograms" in result:
+                for region_name, histograms in result["region_histograms"].items():
+                    if region_name not in self.accumulator["region_histograms"]:
+                        self.accumulator["region_histograms"][region_name] = processor.dict_accumulator({})
+                    for hist_name, hist in histograms.items():
+                        if hist_name in self.accumulator["region_histograms"][region_name]:
+                            # Add histograms if they support it
+                            if hasattr(self.accumulator["region_histograms"][region_name][hist_name], 'add'):
+                                self.accumulator["region_histograms"][region_name][hist_name].add(hist)
+                            else:
+                                self.accumulator["region_histograms"][region_name][hist_name] = hist
+                        else:
+                            self.accumulator["region_histograms"][region_name][hist_name] = hist
+            if "region_cutflow" in result:
+                for key, value in result["region_cutflow"].items():
+                    if key not in self.accumulator["region_cutflow"]:
+                        self.accumulator["region_cutflow"][key] = value
+                    else:
+                        # Merge cutflow dictionaries
+                        if isinstance(self.accumulator["region_cutflow"][key], dict) and isinstance(value, dict):
+                            for k, v in value.items():
+                                self.accumulator["region_cutflow"][key][k] = self.accumulator["region_cutflow"][key].get(k, 0) + v
+            if "metadata" in result:
+                self.accumulator["metadata"].update(result.get("metadata", {}))
+            return self.accumulator
+
+        def postprocess(self, accumulator: Dict[str, Any]) -> Dict[str, Any]:
+            """Post-process results."""
+            return accumulator

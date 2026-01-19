@@ -16,6 +16,21 @@ from .dnn_inference import DNNInference
 from .plotting import PlotManager
 from .regions import RegionManager
 
+# Try to import Coffea for chunk-size support
+try:
+    from coffea import processor
+    from coffea.processor import run_uproot_job, FuturesExecutor
+    try:
+        from dask.distributed import Client
+        from coffea.processor import DaskExecutor
+        DASK_AVAILABLE = True
+    except ImportError:
+        DASK_AVAILABLE = False
+    COFFEA_AVAILABLE = True
+except ImportError:
+    COFFEA_AVAILABLE = False
+    DASK_AVAILABLE = False
+
 
 def setup_logging(level: str = "INFO"):
     """Setup logging configuration."""
@@ -150,7 +165,6 @@ def run_analyzer(args):
     logging.info("Running multi-region analysis...")
 
     config = load_config(args.config)
-    analyzer = DarkBottomLineAnalyzer(config, args.regions_config)
 
     try:
         import uproot
@@ -160,50 +174,114 @@ def run_analyzer(args):
         is_txt_input = len(args.input) == 1 and args.input[0].endswith(".txt")
         input_files = _get_input_files(args.input)
 
-        if is_txt_input and len(input_files) > 1:
-            logging.info("Processing multiple files from .txt file iteratively.")
-            temp_files = []
-            output_dir = os.path.dirname(args.output)
-            os.makedirs(output_dir, exist_ok=True)
+        # Check if we should use Coffea run_uproot_job with chunk-size
+        use_coffea_chunking = (
+            COFFEA_AVAILABLE and 
+            args.executor in ["futures", "dask"] and 
+            hasattr(args, 'chunk_size') and 
+            args.chunk_size is not None
+        )
 
-            for i, file_path in enumerate(input_files):
-                logging.info(f"Processing file {i+1}/{len(input_files)}: {file_path}")
-                temp_output_path = os.path.join(output_dir, f"temp_{i}.pkl")
-                temp_files.append(temp_output_path)
+        if use_coffea_chunking:
+            # Use Coffea run_uproot_job for chunked processing
+            # Import the Coffea processor wrapper (only available if Coffea is installed)
+            try:
+                from .analyzer import DarkBottomLineAnalyzerCoffeaProcessor
+            except ImportError:
+                logging.error("DarkBottomLineAnalyzerCoffeaProcessor not available. Coffea may not be installed.")
+                raise
+            
+            logging.info(f"Using Coffea {args.executor} executor with chunk-size={args.chunk_size}")
+            
+            fileset = {"dataset": input_files}
+            chunksize = args.chunk_size
+            maxchunks = None
+            if args.max_events:
+                maxchunks = (args.max_events + chunksize - 1) // chunksize
+            
+            coffea_analyzer = DarkBottomLineAnalyzerCoffeaProcessor(config, args.regions_config)
+            
+            if args.executor == "futures":
+                result = run_uproot_job(
+                    fileset,
+                    "Events",
+                    coffea_analyzer,
+                    executor=FuturesExecutor,
+                    executor_args={"workers": args.workers},
+                    chunksize=chunksize,
+                    maxchunks=maxchunks,
+                )
+            elif args.executor == "dask" and DASK_AVAILABLE:
+                client = Client(n_workers=args.workers)
+                try:
+                    result = run_uproot_job(
+                        fileset,
+                        "Events",
+                        coffea_analyzer,
+                        executor=DaskExecutor,
+                        executor_args={"client": client, "flatten": True, "retries": 3},
+                        chunksize=chunksize if chunksize != 50000 else 200000,  # Default 200k for dask
+                        maxchunks=maxchunks,
+                    )
+                finally:
+                    client.close()
+            else:
+                raise ValueError(f"Executor {args.executor} not available or not supported")
+            
+            # Save results
+            analyzer = DarkBottomLineAnalyzer(config, args.regions_config)
+            analyzer.accumulator = result
+            os.makedirs(os.path.dirname(args.output), exist_ok=True)
+            analyzer.save_results(args.output)
+            
+        else:
+            # Original processing without chunking
+            analyzer = DarkBottomLineAnalyzer(config, args.regions_config)
 
-                events = uproot.open(f"{file_path}:Events")
+            if is_txt_input and len(input_files) > 1:
+                logging.info("Processing multiple files from .txt file iteratively.")
+                temp_files = []
+                output_dir = os.path.dirname(args.output)
+                os.makedirs(output_dir, exist_ok=True)
 
-                if args.max_events:
-                    events = events.arrays(entry_stop=args.max_events)
-                else:
-                    events = events.arrays()
+                for i, file_path in enumerate(input_files):
+                    logging.info(f"Processing file {i+1}/{len(input_files)}: {file_path}")
+                    temp_output_path = os.path.join(output_dir, f"temp_{i}.pkl")
+                    temp_files.append(temp_output_path)
 
-                events = ak.Array(events)
+                    events = uproot.open(f"{file_path}:Events")
+
+                    if args.max_events:
+                        events = events.arrays(entry_stop=args.max_events)
+                    else:
+                        events = events.arrays()
+
+                    events = ak.Array(events)
+
+                    logging.info(f"Loaded {len(events)} events")
+
+                    results = analyzer.process(events, event_selection_output=None) # No event selection output for partial files
+
+                    analyzer.accumulator = results
+                    analyzer.save_results(temp_output_path)
+
+                _merge_pickle_outputs(temp_files, args.output)
+
+            else:
+                logging.info(f"Loading events from {len(input_files)} files")
+                events = uproot.concatenate([f"{path}:Events" for path in input_files])
+
+                if args.max_events and len(events) > args.max_events:
+                    events = events[:args.max_events]
+                    logging.info(f"Limited to {args.max_events} events")
 
                 logging.info(f"Loaded {len(events)} events")
 
-                results = analyzer.process(events, event_selection_output=None) # No event selection output for partial files
+                results = analyzer.process(events, event_selection_output=args.event_selection_output)
 
+                os.makedirs(os.path.dirname(args.output), exist_ok=True)
                 analyzer.accumulator = results
-                analyzer.save_results(temp_output_path)
-
-            _merge_pickle_outputs(temp_files, args.output)
-
-        else:
-            logging.info(f"Loading events from {len(input_files)} files")
-            events = uproot.concatenate([f"{path}:Events" for path in input_files])
-
-            if args.max_events and len(events) > args.max_events:
-                events = events[:args.max_events]
-                logging.info(f"Limited to {args.max_events} events")
-
-            logging.info(f"Loaded {len(events)} events")
-
-            results = analyzer.process(events, event_selection_output=args.event_selection_output)
-
-            os.makedirs(os.path.dirname(args.output), exist_ok=True)
-            analyzer.accumulator = results
-            analyzer.save_results(args.output)
+                analyzer.save_results(args.output)
 
     except Exception as e:
         logging.error(f"Error in multi-region analysis: {e}")
@@ -463,7 +541,9 @@ Examples:
     analyze_parser.add_argument("--executor", choices=["iterative", "futures", "dask"],
                                default="iterative", help="Execution backend")
     analyze_parser.add_argument("--workers", type=int, default=4, help="Number of workers")
-    analyze_parser.add_argument("--max-events", type=int, help="Maximum events to process")
+    analyze_parser.add_argument("--chunk-size", type=int, default=None,
+                               help="Number of events per chunk for futures/dask executors (default: 50000 for futures, 200000 for dask). Only used with futures/dask executors.")
+    analyze_parser.add_argument("--max-events", type=int, help="Maximum events to process (converted to maxchunks when using chunk-size)")
     analyze_parser.set_defaults(func=run_analyzer)
 
     # Train DNN command
