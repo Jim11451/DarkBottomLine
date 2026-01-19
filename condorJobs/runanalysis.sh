@@ -1,37 +1,21 @@
 #!/bin/bash
-# Condor job script for DarkBottomLine analysis
-# Usage: runanalysis.sh <ProcId> [optional arguments]
-#
-# Environment variables that can be set in submit.sub:
-#   DBL_CONFIG: Configuration file (default: configs/2022.yaml)
-#   DBL_REGIONS_CONFIG: Regions config file (default: configs/regions.yaml)
-#   DBL_OUTPUT: Output file path
-#   DBL_EXECUTOR: Executor type (iterative, futures, dask) (default: futures)
-#   DBL_CHUNK_SIZE: Chunk size for futures/dask (default: 50000)
-#   DBL_WORKERS: Number of workers (default: 4)
-#   DBL_MAX_EVENTS: Maximum events to process (optional)
-
+ulimit -s unlimited # Set unlimited stack size
 set -e  # Exit on error
 set -x  # Debug mode - show commands
-
-# Set unlimited stack size
-ulimit -s unlimited
 
 # Get repository directory from environment variable (set at submission time)
 # This is the path from where condor jobs are submitted, not the condor cwd
 DBL_REPO_DIR="${DBL_REPO_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 
-# Change to condor working directory (where files are transferred)
-# But use DBL_REPO_DIR for repository paths (like .local directory)
-CONDOR_CWD="$(pwd)"
-cd "${CONDOR_CWD}"
+# Change to repository directory (like the working script)
+cd "${DBL_REPO_DIR}"
 
 echo "=========================================="
 echo "DarkBottomLine Condor Job"
 echo "=========================================="
 echo "Job ID: ${1:-0}"
 echo "Repository directory: ${DBL_REPO_DIR}"
-echo "Condor working directory: ${CONDOR_CWD}"
+echo "Working directory: $(pwd)"
 echo "Date: $(date)"
 echo ""
 
@@ -45,15 +29,6 @@ echo "Top-level files and directories:"
 ls -la | head -20
 echo ""
 
-# Source CMSSW environment if available
-if [ -f "/cvmfs/cms.cern.ch/cmsset_default.sh" ]; then
-    echo "Sourcing CMSSW environment..."
-    source /cvmfs/cms.cern.ch/cmsset_default.sh
-    if [ -n "${SCRAM_ARCH}" ]; then
-        eval `scramv1 runtime -sh` 2>/dev/null || true
-    fi
-fi
-
 # Source LCG environment (critical for CERN systems)
 if [ -f "/cvmfs/sft.cern.ch/lcg/views/LCG_105/x86_64-el9-gcc11-opt/setup.sh" ]; then
     echo "Sourcing LCG environment..."
@@ -64,43 +39,21 @@ fi
 
 # Set up DarkBottomLine environment
 echo "Setting up DarkBottomLine environment..."
-# Use .local directory from repository location (submission machine), not condor cwd
+# Use .local directory from repository location (like the working script)
 LOCAL_DIR="${DBL_REPO_DIR}/.local"
 PYTHON_VERSION=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null || echo "3.9")
 SITE_PACKAGES_DIR="${LOCAL_DIR}/lib/python${PYTHON_VERSION}/site-packages"
-LOCAL_BIN_DIR="${LOCAL_DIR}/bin"
 
-# Add to PYTHONPATH
+# Set PYTHONPATH directly (like the working script)
 if [ -d "${SITE_PACKAGES_DIR}" ]; then
     export PYTHONPATH="${SITE_PACKAGES_DIR}:${PYTHONPATH}"
-    echo "✓ Added to PYTHONPATH: ${SITE_PACKAGES_DIR}"
-elif [ -d "${LOCAL_DIR}" ]; then
-    export PYTHONPATH="${LOCAL_DIR}:${PYTHONPATH}"
-    echo "✓ Added to PYTHONPATH: ${LOCAL_DIR}"
+    echo "✓ Set PYTHONPATH: ${SITE_PACKAGES_DIR}"
 else
-    echo "⚠ Warning: .local directory not found. Dependencies may not be available."
+    echo "⚠ Warning: .local directory not found at ${SITE_PACKAGES_DIR}"
+    echo "  Dependencies may not be available."
 fi
 
-# Add to PATH
-if [ -d "${LOCAL_BIN_DIR}" ]; then
-    export PATH="${LOCAL_BIN_DIR}:${PATH}"
-    echo "✓ Added to PATH: ${LOCAL_BIN_DIR}"
-fi
 
-# Verify Python and required modules
-echo ""
-echo "Verifying installation..."
-if python3 -c "from darkbottomline import DarkBottomLineProcessor; print('✓ Import successful')" 2>/dev/null; then
-    echo "✓ Package can be imported"
-else
-    echo "⚠ Package installed but import test failed"
-    echo "  Make sure .local is in your PYTHONPATH:"
-    echo "  export PYTHONPATH=\"${LOCAL_DIR}:\$PYTHONPATH\""
-    echo "  export PYTHONPATH=\"${SITE_PACKAGES_DIR}:\$PYTHONPATH\""
-fi
-
-python3 --version
-echo ""
 
 # Set default values from environment or use defaults
 CONFIG="${DBL_CONFIG:-configs/2022.yaml}"
@@ -110,20 +63,11 @@ CHUNK_SIZE="${DBL_CHUNK_SIZE:-50000}"
 WORKERS="${DBL_WORKERS:-4}"
 MAX_EVENTS="${DBL_MAX_EVENTS:-}"
 
-# Handle input: DBL_BKG_FILE mode
-# Process individual files from a background file
-#    - DBL_BKG_FILE=WtoLNu-2Jets_....txt specifies the sample file
-#    - ProcId selects which line/file within that sample (0 = first file, 1 = second, etc.)
-#    - Each file from the sample gets its own job/node
 
 PROC_ID="${1:-0}"
 BKG_FILE="${DBL_BKG_FILE:-}"
 
 if [ -n "${BKG_FILE}" ]; then
-    # Mode 1: Process individual files from a background file
-    # BKG_FILE is provided as just the filename (e.g., "WtoLNu-2Jets_....txt")
-    # It will be transferred by condor directly to the current working directory
-
     # Check if file exists (it should be transferred by condor)
     if [ ! -f "${BKG_FILE}" ]; then
         echo "✗ Error: Sample file not found: ${BKG_FILE}"
@@ -133,7 +77,6 @@ if [ -n "${BKG_FILE}" ]; then
         ls -la | head -10
         exit 1
     fi
-
     # Show that the file was found
     echo "✓ Sample file found: ${BKG_FILE}"
     echo "  File size: $(ls -lh "${BKG_FILE}" | awk '{print $5}')"
