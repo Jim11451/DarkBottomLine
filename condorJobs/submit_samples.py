@@ -69,6 +69,10 @@ def create_submit_file(
 
     env_vars = ' \\\n'.join(env_parts)
 
+    # Get sample file path relative to condorJobs directory
+    # The sample file is in samplefiles/ directory
+    sample_file_path = f'samplefiles/{sample_file}'
+
     # Replace lines
     new_lines = []
     i = 0
@@ -82,6 +86,12 @@ def create_submit_file(
             i += 1
             while i < len(lines) and ('\\' in lines[i] or lines[i].strip().endswith('"') or not lines[i].strip()):
                 i += 1
+            continue
+
+        # Replace transfer_input_files line
+        if line.strip().startswith('transfer_input_files'):
+            new_lines.append(f'transfer_input_files = {sample_file_path}\n')
+            i += 1
             continue
 
         # Replace queue line
