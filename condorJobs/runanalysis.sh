@@ -39,12 +39,6 @@ echo ""
 echo "Top-level files and directories:"
 ls -la | head -20
 echo ""
-if [ -d "samplefiles" ]; then
-    echo "Contents of samplefiles/ directory:"
-    ls -la samplefiles/ 2>/dev/null || echo "  (samplefiles directory exists but cannot list)"
-    echo ""
-fi
-echo ""
 
 # Source CMSSW environment if available
 if [ -f "/cvmfs/cms.cern.ch/cmsset_default.sh" ]; then
@@ -118,11 +112,7 @@ BKG_FILE="${DBL_BKG_FILE:-}"
 if [ -n "${BKG_FILE}" ]; then
     # Mode 1: Process individual files from a background file
     # BKG_FILE is provided as just the filename (e.g., "WtoLNu-2Jets_....txt")
-    # It will be transferred by condor to the working directory
-    # If it doesn't contain a path, assume it's in samplefiles/ directory
-    if [[ ! "${BKG_FILE}" == *"/"* ]]; then
-        BKG_FILE="samplefiles/${BKG_FILE}"
-    fi
+    # It will be transferred by condor directly to the current working directory
 
     # Check if file exists (it should be transferred by condor)
     if [ ! -f "${BKG_FILE}" ]; then
@@ -131,10 +121,6 @@ if [ -n "${BKG_FILE}" ]; then
         echo "  Current directory: $(pwd)"
         echo "  Files in current directory:"
         ls -la | head -10
-        if [ -d "samplefiles" ]; then
-            echo "  Contents of samplefiles/ directory:"
-            ls -la samplefiles/ 2>/dev/null || echo "    (cannot list)"
-        fi
         exit 1
     fi
 

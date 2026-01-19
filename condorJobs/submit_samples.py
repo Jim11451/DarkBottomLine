@@ -70,9 +70,9 @@ def create_submit_file(
 
     env_vars = ' \\\n'.join(env_parts)
 
-    # Get sample file path relative to condorJobs directory
-    # The sample file is in samplefiles/ directory
-    sample_file_path = f'samplefiles/{sample_file}'
+    # Get sample file path - file will be transferred directly to cwd
+    # So we just use the filename
+    sample_file_path = sample_file
 
     # Get username and user ID for x509userproxy path
     try:
