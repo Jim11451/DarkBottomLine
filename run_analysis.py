@@ -138,13 +138,13 @@ def run_analysis_futures(
         logging.info(f"Limiting to {maxchunks} chunks")
     start_time = time.time()
 
-    executor = FuturesExecutor(workers=workers)
-
+    # Pass executor class, not instance - run_uproot_job will instantiate it
     result = run_uproot_job(
         fileset,
         "Events",
         processor_instance,
-        executor=executor,
+        executor=FuturesExecutor,
+        executor_args={"workers": workers},
         chunksize=chunksize,
         maxchunks=maxchunks,
     )
@@ -192,14 +192,14 @@ def run_analysis_dask(
         client = Client(n_workers=workers)
 
         try:
-            executor = DaskExecutor(client=client)
-
+            # For DaskExecutor, we need to pass the client in executor_args
+            # since run_uproot_job will instantiate the executor
             result = run_uproot_job(
                 fileset,
                 "Events",
                 processor_instance,
-                executor=executor,
-                executor_args={"flatten": True, "retries": 3},
+                executor=DaskExecutor,
+                executor_args={"client": client, "flatten": True, "retries": 3},
                 chunksize=chunksize,
                 maxchunks=maxchunks,
             )
@@ -344,14 +344,14 @@ def main():
                 input_files = [line.strip() for line in f if line.strip() and not line.strip().startswith('#')]
         else:
             input_files = [args.input]
-        
+
         fileset = {"dataset": input_files}
         chunksize = args.chunk_size
         maxchunks = None
         if args.max_events:
             # Calculate maxchunks based on max_events and chunksize
             maxchunks = (args.max_events + chunksize - 1) // chunksize
-        
+
         coffea_processor = DarkBottomLineCoffeaProcessor(config)
         results = run_analysis_futures(fileset, coffea_processor, args.workers, chunksize, maxchunks)
     elif args.executor == "dask":
@@ -362,13 +362,13 @@ def main():
                 input_files = [line.strip() for line in f if line.strip() and not line.strip().startswith('#')]
         else:
             input_files = [args.input]
-        
+
         fileset = {"dataset": input_files}
         chunksize = args.chunk_size if args.chunk_size != 50000 else 200000  # Default to 200k for dask
         maxchunks = None
         if args.max_events:
             maxchunks = (args.max_events + chunksize - 1) // chunksize
-        
+
         coffea_processor = DarkBottomLineCoffeaProcessor(config)
         results = run_analysis_dask(fileset, coffea_processor, args.workers, chunksize, maxchunks)
     else:
