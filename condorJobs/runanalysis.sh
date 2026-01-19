@@ -189,20 +189,15 @@ if [ ! -f "${REGIONS_CONFIG}" ]; then
     exit 1
 fi
 
-# Validate input file exists (skip validation for .txt files as CLI handles them)
-if [[ ! "${INPUT}" == *.txt ]]; then
-    if [ ! -f "${INPUT}" ] && [[ ! "${INPUT}" == root://* ]]; then
-        echo "✗ Error: Input file not found: ${INPUT}"
-        echo "  Looking for: ${INPUT}"
-        exit 1
-    fi
+# Validate input file exists (should be a ROOT file)
+if [ ! -f "${INPUT}" ] && [[ ! "${INPUT}" == root://* ]]; then
+    echo "✗ Error: Input file not found: ${INPUT}"
+    echo "  Looking for: ${INPUT}"
+    exit 1
 fi
 
 # Show input information
-if [[ "${INPUT}" == *.txt ]]; then
-    FILE_COUNT=$(grep -v '^#' "${INPUT}" | grep -v '^$' | wc -l)
-    echo "✓ Input file list: ${INPUT} (${FILE_COUNT} files)"
-elif [ -n "${BKG_FILE}" ]; then
+if [ -n "${BKG_FILE}" ]; then
     TOTAL_FILES=$(grep -v '^#' "${BKG_FILE}" | grep -v '^$' | wc -l)
     echo "✓ Processing file ${FILE_INDEX} of ${TOTAL_FILES} from ${BKG_FILE}"
 fi
