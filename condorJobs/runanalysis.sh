@@ -5,7 +5,6 @@
 # Environment variables that can be set in submit.sub:
 #   DBL_CONFIG: Configuration file (default: configs/2022.yaml)
 #   DBL_REGIONS_CONFIG: Regions config file (default: configs/regions.yaml)
-#   DBL_INPUT: Input file(s) or .txt file with file list
 #   DBL_OUTPUT: Output file path
 #   DBL_EXECUTOR: Executor type (iterative, futures, dask) (default: futures)
 #   DBL_CHUNK_SIZE: Chunk size for futures/dask (default: 50000)
@@ -107,17 +106,14 @@ CHUNK_SIZE="${DBL_CHUNK_SIZE:-50000}"
 WORKERS="${DBL_WORKERS:-4}"
 MAX_EVENTS="${DBL_MAX_EVENTS:-}"
 
-# Handle input: Support two modes:
-# 1. DBL_BKG_FILE mode: Process individual files from a background file
-#    - DBL_BKG_FILE=bkg_ttbar.txt specifies the background file
-#    - ProcId selects which line/file within that background (0 = first file, 1 = second, etc.)
-#    - Each file from the background gets its own job/node
-# 2. DBL_INPUT mode: Process a single file or .txt file directly
-#    - DBL_INPUT can be a single ROOT file or a .txt file with multiple files
+# Handle input: DBL_BKG_FILE mode
+# Process individual files from a background file
+#    - DBL_BKG_FILE=WtoLNu-2Jets_....txt specifies the sample file
+#    - ProcId selects which line/file within that sample (0 = first file, 1 = second, etc.)
+#    - Each file from the sample gets its own job/node
 
 PROC_ID="${1:-0}"
 BKG_FILE="${DBL_BKG_FILE:-}"
-INPUT_SPEC="${DBL_INPUT:-}"
 
 if [ -n "${BKG_FILE}" ]; then
     # Mode 1: Process individual files from a background file
@@ -135,8 +131,19 @@ if [ -n "${BKG_FILE}" ]; then
         echo "  Current directory: $(pwd)"
         echo "  Files in current directory:"
         ls -la | head -10
+        if [ -d "samplefiles" ]; then
+            echo "  Contents of samplefiles/ directory:"
+            ls -la samplefiles/ 2>/dev/null || echo "    (cannot list)"
+        fi
         exit 1
     fi
+    
+    # Show that the file was found
+    echo "✓ Sample file found: ${BKG_FILE}"
+    echo "  File size: $(ls -lh "${BKG_FILE}" | awk '{print $5}')"
+    echo "  First few lines of file:"
+    head -3 "${BKG_FILE}" | sed 's/^/    /'
+    echo ""
 
     # Extract background name
     BKG_NAME=$(basename "${BKG_FILE}" .txt)
@@ -163,35 +170,12 @@ if [ -n "${BKG_FILE}" ]; then
         OUTPUT="${DBL_OUTPUT}"
     fi
 
-elif [ -n "${INPUT_SPEC}" ]; then
-    # Mode 2: DBL_INPUT is set - use it directly
-    INPUT="${INPUT_SPEC}"
-
-    # Extract background name from input file if it's a .txt file
-    if [[ "${INPUT_SPEC}" == *.txt ]]; then
-        BKG_NAME=$(basename "${INPUT_SPEC}" .txt)
-        # For .txt files, process all files in the list (CLI handles this)
-    else
-        BKG_NAME="data_${PROC_ID}"
-    fi
-
-    # Generate output name
-    if [ -z "${DBL_OUTPUT}" ]; then
-        if [[ "${INPUT_SPEC}" == *.txt ]]; then
-            OUTPUT="outputs/hists/regions_${BKG_NAME}.pkl"
-        else
-            OUTPUT="outputs/hists/regions_${BKG_NAME}.pkl"
-        fi
-    else
-        OUTPUT="${DBL_OUTPUT}"
-    fi
-
 else
-    # Mode 3: Default - use single default file
+    # Default fallback - use single default file (for testing)
     INPUT="root://cms-xrd-global.cern.ch//store/mc/Run3Summer22NanoAODv12/DYto2L-2Jets_MLL-50_PTLL-40to100_2J_TuneCP5_13p6TeV_amcatnloFXFX-pythia8/NANOAODSIM/130X_mcRun3_2022_realistic_v5-v1/2560000/30624dd1-ba96-465e-a745-8ff472357277.root"
     BKG_NAME="default_${PROC_ID}"
     OUTPUT="outputs/hists/regions_${BKG_NAME}.pkl"
-    echo "⚠ No DBL_BKG_FILE or DBL_INPUT set, using default input file"
+    echo "⚠ No DBL_BKG_FILE set, using default input file"
 fi
 
 # Validate configuration files exist
@@ -239,10 +223,7 @@ echo "Background Name: ${BKG_NAME}"
 echo "Config: ${CONFIG}"
 echo "Regions Config: ${REGIONS_CONFIG}"
 echo "Input: ${INPUT}"
-if [[ "${INPUT}" == *.txt ]]; then
-    FILE_COUNT=$(grep -v '^#' "${INPUT}" | grep -v '^$' | wc -l)
-    echo "  → Contains ${FILE_COUNT} input files"
-elif [ -n "${BKG_FILE}" ]; then
+if [ -n "${BKG_FILE}" ]; then
     TOTAL_FILES=$(grep -v '^#' "${BKG_FILE}" | grep -v '^$' | wc -l)
     echo "  → File ${FILE_INDEX} of ${TOTAL_FILES} from ${BKG_FILE}"
 fi
