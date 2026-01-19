@@ -137,7 +137,7 @@ if [ -n "${BKG_FILE}" ]; then
         fi
         exit 1
     fi
-    
+
     # Show that the file was found
     echo "✓ Sample file found: ${BKG_FILE}"
     echo "  File size: $(ls -lh "${BKG_FILE}" | awk '{print $5}')"
