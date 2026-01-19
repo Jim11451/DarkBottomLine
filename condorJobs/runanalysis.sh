@@ -31,6 +31,22 @@ echo "Working directory: ${DBL_DIR}"
 echo "Date: $(date)"
 echo ""
 
+# Show directory structure after file transfer (for debugging)
+echo "=========================================="
+echo "Directory Structure (after file transfer)"
+echo "=========================================="
+echo "Current directory: $(pwd)"
+echo ""
+echo "Top-level files and directories:"
+ls -la | head -20
+echo ""
+if [ -d "samplefiles" ]; then
+    echo "Contents of samplefiles/ directory:"
+    ls -la samplefiles/ 2>/dev/null || echo "  (samplefiles directory exists but cannot list)"
+    echo ""
+fi
+echo ""
+
 # Source CMSSW environment if available
 if [ -f "/cvmfs/cms.cern.ch/cmsset_default.sh" ]; then
     echo "Sourcing CMSSW environment..."
