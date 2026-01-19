@@ -212,8 +212,18 @@ def run_analyzer(args):
                     maxchunks=maxchunks,
                 )
             elif args.executor == "dask" and DASK_AVAILABLE:
-                client = Client(n_workers=args.workers)
+                client = None
                 try:
+                    # Start Dask client
+                    client = Client(n_workers=args.workers, timeout=120)
+                    
+                    # Wait for workers to be ready (with timeout)
+                    try:
+                        client.wait_for_workers(args.workers, timeout=60)
+                        logging.info(f"Dask client ready with {len(client.scheduler_info()['workers'])} workers")
+                    except Exception as e:
+                        logging.warning(f"Timeout waiting for workers, continuing anyway: {e}")
+                    
                     result = run_uproot_job(
                         fileset,
                         "Events",
@@ -223,8 +233,16 @@ def run_analyzer(args):
                         chunksize=chunksize if chunksize != 50000 else 200000,  # Default 200k for dask
                         maxchunks=maxchunks,
                     )
+                except Exception as e:
+                    logging.error(f"Dask execution error: {e}")
+                    raise
                 finally:
-                    client.close()
+                    # Ensure client is properly closed
+                    if client is not None:
+                        try:
+                            client.close()
+                        except Exception as e:
+                            logging.warning(f"Error closing Dask client: {e}")
             else:
                 raise ValueError(f"Executor {args.executor} not available or not supported")
 

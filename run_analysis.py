@@ -189,9 +189,17 @@ def run_analysis_dask(
         start_time = time.time()
 
         # Start Dask client
-        client = Client(n_workers=workers)
-
+        client = None
         try:
+            client = Client(n_workers=workers, timeout=120)
+            
+            # Wait for workers to be ready (with timeout)
+            try:
+                client.wait_for_workers(workers, timeout=60)
+                logging.info(f"Dask client ready with {len(client.scheduler_info()['workers'])} workers")
+            except Exception as e:
+                logging.warning(f"Timeout waiting for workers, continuing anyway: {e}")
+            
             # For DaskExecutor, we need to pass the client in executor_args
             # since run_uproot_job will instantiate the executor
             result = run_uproot_job(
@@ -209,8 +217,16 @@ def run_analysis_dask(
 
             return result
 
+        except Exception as e:
+            logging.error(f"Dask execution error: {e}")
+            raise
         finally:
-            client.close()
+            # Ensure client is properly closed
+            if client is not None:
+                try:
+                    client.close()
+                except Exception as e:
+                    logging.warning(f"Error closing Dask client: {e}")
 
     except ImportError:
         logging.warning("Dask not available. Falling back to iterative execution.")
