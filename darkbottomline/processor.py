@@ -458,10 +458,26 @@ if COFFEA_AVAILABLE:
         def __init__(self, config: Dict[str, Any]):
             self.config = config
             self.processor = DarkBottomLineProcessor(config)
+            # Initialize accumulator for Coffea
+            self.accumulator = processor.dict_accumulator({
+                "histograms": processor.defaultdict_accumulator(float),
+                "cutflow": processor.defaultdict_accumulator(int),
+                "metadata": processor.dict_accumulator({}),
+            })
 
         def process(self, events: ak.Array) -> Dict[str, Any]:
             """Process events using the main processor."""
-            return self.processor.process(events)
+            result = self.processor.process(events)
+            # Update accumulator with results
+            if "histograms" in result:
+                for key, value in result["histograms"].items():
+                    self.accumulator["histograms"][key] += value
+            if "cutflow" in result:
+                for key, value in result["cutflow"].items():
+                    self.accumulator["cutflow"][key] += value
+            if "metadata" in result:
+                self.accumulator["metadata"].update(result["metadata"])
+            return self.accumulator
 
         def postprocess(self, accumulator: Dict[str, Any]) -> Dict[str, Any]:
             """Post-process results."""

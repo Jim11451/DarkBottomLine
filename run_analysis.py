@@ -9,7 +9,7 @@ import time
 import yaml
 import os
 from pathlib import Path
-from typing import Dict, Any, Optional, Union
+from typing import Dict, Any, Optional, Union, List
 
 try:
     from coffea import processor
@@ -108,88 +108,114 @@ def run_analysis_iterative(
 
 
 def run_analysis_futures(
-    events: Any,
-    processor: DarkBottomLineProcessor,
-    workers: int = 4
+    fileset: Dict[str, List[str]],
+    processor_instance: DarkBottomLineCoffeaProcessor,
+    workers: int = 4,
+    chunksize: int = 50000,
+    maxchunks: Optional[int] = None
 ) -> Dict[str, Any]:
     """
-    Run analysis using futures executor.
+    Run analysis using futures executor with run_uproot_job.
 
     Args:
-        events: Events to process
-        processor: Analysis processor
+        fileset: Dictionary mapping dataset names to file paths
+        processor_instance: Coffea-compatible processor instance
         workers: Number of parallel workers
+        chunksize: Number of events per chunk
+        maxchunks: Optional limit on number of chunks to process
 
     Returns:
         Analysis results
     """
     if not COFFEA_AVAILABLE:
         logging.warning("Coffea not available. Falling back to iterative execution.")
-        return run_analysis_iterative(events, processor)
+        return None
 
-    logging.info(f"Running analysis with futures executor ({workers} workers)...")
+    from coffea.processor import run_uproot_job, FuturesExecutor
+
+    logging.info(f"Running analysis with futures executor ({workers} workers, chunksize={chunksize})...")
+    if maxchunks:
+        logging.info(f"Limiting to {maxchunks} chunks")
     start_time = time.time()
 
-    # Use Coffea futures executor
-    executor = processor.FuturesExecutor(workers=workers)
-    runner = processor.Runner(executor=executor)
+    executor = FuturesExecutor(workers=workers)
 
-    results = runner(events, processor)
+    result = run_uproot_job(
+        fileset,
+        "Events",
+        processor_instance,
+        executor=executor,
+        executor_args={"workers": workers, "chunksize": chunksize},
+        chunksize=chunksize,
+        maxchunks=maxchunks,
+    )
 
     processing_time = time.time() - start_time
     logging.info(f"Futures processing completed in {processing_time:.2f} seconds")
 
-    return results
+    return result
 
 
 def run_analysis_dask(
-    events: Any,
-    processor: DarkBottomLineProcessor,
-    workers: int = 4
+    fileset: Dict[str, List[str]],
+    processor_instance: DarkBottomLineCoffeaProcessor,
+    workers: int = 4,
+    chunksize: int = 200000,
+    maxchunks: Optional[int] = None
 ) -> Dict[str, Any]:
     """
-    Run analysis using Dask executor.
+    Run analysis using Dask executor with run_uproot_job.
 
     Args:
-        events: Events to process
-        processor: Analysis processor
+        fileset: Dictionary mapping dataset names to file paths
+        processor_instance: Coffea-compatible processor instance
         workers: Number of parallel workers
+        chunksize: Number of events per chunk
+        maxchunks: Optional limit on number of chunks to process
 
     Returns:
         Analysis results
     """
     if not COFFEA_AVAILABLE:
         logging.warning("Coffea not available. Falling back to iterative execution.")
-        return run_analysis_iterative(events, processor)
+        return None
 
     try:
         from dask.distributed import Client
-        from coffea.processor import DaskExecutor
+        from coffea.processor import run_uproot_job, DaskExecutor
 
-        logging.info(f"Running analysis with Dask executor ({workers} workers)...")
+        logging.info(f"Running analysis with Dask executor ({workers} workers, chunksize={chunksize})...")
+        if maxchunks:
+            logging.info(f"Limiting to {maxchunks} chunks")
         start_time = time.time()
 
         # Start Dask client
         client = Client(n_workers=workers)
 
         try:
-            # Use Coffea Dask executor
             executor = DaskExecutor(client=client)
-            runner = processor.Runner(executor=executor)
 
-            results = runner(events, processor)
+            result = run_uproot_job(
+                fileset,
+                "Events",
+                processor_instance,
+                executor=executor,
+                executor_args={"client": client, "flatten": True, "retries": 3},
+                chunksize=chunksize,
+                maxchunks=maxchunks,
+            )
 
             processing_time = time.time() - start_time
             logging.info(f"Dask processing completed in {processing_time:.2f} seconds")
 
-            return results
+            return result
 
         finally:
             client.close()
 
     except ImportError:
         logging.warning("Dask not available. Falling back to iterative execution.")
-        return run_analysis_iterative(events, processor)
+        return None
 
 
 def save_results(results: Dict[str, Any], output_path: str):
@@ -277,8 +303,10 @@ def main():
                        default="iterative", help="Execution backend")
     parser.add_argument("--workers", type=int, default=4,
                        help="Number of parallel workers")
+    parser.add_argument("--chunk-size", type=int, default=50000,
+                       help="Number of events per chunk for futures/dask executors (default: 50000)")
     parser.add_argument("--max-events", type=int, default=None,
-                       help="Maximum number of events to process")
+                       help="Maximum number of events to process (converted to maxchunks for run_uproot_job)")
     parser.add_argument("--save-skims", action="store_true",
                        help="Save skimmed events")
     parser.add_argument("--log-level", choices=["DEBUG", "INFO", "WARNING", "ERROR"],
@@ -296,24 +324,54 @@ def main():
     # Override config with command line arguments
     config['save_skims'] = args.save_skims
 
-    # Load events
-    logging.info(f"Loading events from {args.input}")
-    events = load_events(args.input, args.max_events)
-
     # Initialize processor
     logging.info("Initializing processor...")
-    processor = DarkBottomLineProcessor(config)
+    base_processor = DarkBottomLineProcessor(config)
 
     # Run analysis
     logging.info(f"Starting analysis with {args.executor} executor...")
     start_time = time.time()
 
     if args.executor == "iterative":
-        results = run_analysis_iterative(events, processor)
+        # Load events for iterative mode
+        logging.info(f"Loading events from {args.input}")
+        events = load_events(args.input, args.max_events)
+        results = run_analysis_iterative(events, base_processor)
     elif args.executor == "futures":
-        results = run_analysis_futures(events, processor, args.workers)
+        # Use run_uproot_job with FuturesExecutor
+        input_files = []
+        if args.input.endswith('.txt'):
+            with open(args.input, 'r') as f:
+                input_files = [line.strip() for line in f if line.strip() and not line.strip().startswith('#')]
+        else:
+            input_files = [args.input]
+        
+        fileset = {"dataset": input_files}
+        chunksize = args.chunk_size
+        maxchunks = None
+        if args.max_events:
+            # Calculate maxchunks based on max_events and chunksize
+            maxchunks = (args.max_events + chunksize - 1) // chunksize
+        
+        coffea_processor = DarkBottomLineCoffeaProcessor(config)
+        results = run_analysis_futures(fileset, coffea_processor, args.workers, chunksize, maxchunks)
     elif args.executor == "dask":
-        results = run_analysis_dask(events, processor, args.workers)
+        # Use run_uproot_job with DaskExecutor
+        input_files = []
+        if args.input.endswith('.txt'):
+            with open(args.input, 'r') as f:
+                input_files = [line.strip() for line in f if line.strip() and not line.strip().startswith('#')]
+        else:
+            input_files = [args.input]
+        
+        fileset = {"dataset": input_files}
+        chunksize = args.chunk_size if args.chunk_size != 50000 else 200000  # Default to 200k for dask
+        maxchunks = None
+        if args.max_events:
+            maxchunks = (args.max_events + chunksize - 1) // chunksize
+        
+        coffea_processor = DarkBottomLineCoffeaProcessor(config)
+        results = run_analysis_dask(fileset, coffea_processor, args.workers, chunksize, maxchunks)
     else:
         raise ValueError(f"Unknown executor: {args.executor}")
 

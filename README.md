@@ -181,7 +181,8 @@ When using a `.txt` file for input, list one file path per line. Empty lines and
 - `--output`: Output pickle file path
 - `--executor`: Execution backend (iterative, futures, dask) - default: iterative
 - `--workers`: Number of parallel workers (for futures/dask) - default: 4
-- `--max-events`: Maximum number of events to process (optional, for testing)
+- `--chunk-size`: Number of events per chunk for futures/dask executors (default: 50000 for futures, 200000 for dask). Useful for managing memory with large files.
+- `--max-events`: Maximum number of events to process (optional, for testing). For futures/dask executors, this is converted to maxchunks based on chunk-size.
 
 #### Step 2: Generate Plots
 
@@ -264,7 +265,8 @@ darkbottomline run \
 - `--output`: Path to output file (supports .parquet, .root, .pkl)
 - `--executor`: Execution backend (iterative, futures, dask)
 - `--workers`: Number of parallel workers (for futures/dask)
-- `--max-events`: Maximum number of events to process
+- `--chunk-size`: Number of events per chunk for futures/dask executors (default: 50000 for futures, 200000 for dask). Helps manage memory with large files.
+- `--max-events`: Maximum number of events to process. For futures/dask executors, converted to maxchunks based on chunk-size.
 - `--event-selection-output`: Optional path to save events that pass event-level selection (supports `.pkl` and `.root`).
     - If you provide a `.pkl` path, a plain-Python-serializable pickle will be saved and a raw awkward backup `*.awk_raw.pkl` will also be created.
     - If you provide a `.root` path, a small ROOT TTree `Events` will be written containing scalar branches (event identifiers, MET scalars, and object multiplicities).
@@ -287,9 +289,23 @@ python run_analysis.py --config configs/2023.yaml --input my_files.txt --output 
 # Futures execution (multi-threaded, good for local parallelization)
 python run_analysis.py --config configs/2023.yaml --input file1.root file2.root --output results.parquet --executor futures --workers 4
 
+# Futures execution with custom chunk size (for large files)
+python run_analysis.py --config configs/2023.yaml --input large_file.root --output results.pkl --executor futures --workers 8 --chunk-size 100000
+
 # Dask execution (distributed, good for production)
 python run_analysis.py --config configs/2023.yaml --input nanoaod.root --output results.root --executor dask --workers 8
+
+# Dask execution with custom chunk size (default is 200000 for dask)
+python run_analysis.py --config configs/2023.yaml --input large_file.root --output results.root --executor dask --workers 8 --chunk-size 500000
 ```
+
+**Chunk Size Notes:**
+- Chunk size controls how many events are processed per chunk, helping manage memory usage
+- Smaller chunks (e.g., 50000) use less memory but may have more overhead
+- Larger chunks (e.g., 200000+) are more efficient but require more memory
+- Default: 50000 for futures executor, 200000 for dask executor
+- Only applies to `futures` and `dask` executors (uses `run_uproot_job` internally)
+- The `iterative` executor loads all events at once and doesn't use chunking
 
 ## Configuration
 
@@ -611,10 +627,15 @@ conda install -c conda-forge root
    pip install -e .
    ```
 
-3. **Memory issues**: Use `--max-events` to limit events for testing:
-   ```bash
-   darkbottomline analyze ... --max-events 10000
-   ```
+3. **Memory issues**: 
+   - Use `--max-events` to limit events for testing:
+     ```bash
+     darkbottomline analyze ... --max-events 10000
+     ```
+   - For futures/dask executors, reduce `--chunk-size` to process smaller chunks:
+     ```bash
+     darkbottomline analyze ... --executor futures --chunk-size 25000
+     ```
 
 4. **Executor issues**: Try different executors (iterative, futures, dask)
 
