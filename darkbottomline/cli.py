@@ -216,14 +216,14 @@ def run_analyzer(args):
                 try:
                     # Start Dask client
                     client = Client(n_workers=args.workers, timeout=120)
-                    
+
                     # Wait for workers to be ready (with timeout)
                     try:
                         client.wait_for_workers(args.workers, timeout=60)
                         logging.info(f"Dask client ready with {len(client.scheduler_info()['workers'])} workers")
                     except Exception as e:
                         logging.warning(f"Timeout waiting for workers, continuing anyway: {e}")
-                    
+
                     result = run_uproot_job(
                         fileset,
                         "Events",

@@ -192,14 +192,14 @@ def run_analysis_dask(
         client = None
         try:
             client = Client(n_workers=workers, timeout=120)
-            
+
             # Wait for workers to be ready (with timeout)
             try:
                 client.wait_for_workers(workers, timeout=60)
                 logging.info(f"Dask client ready with {len(client.scheduler_info()['workers'])} workers")
             except Exception as e:
                 logging.warning(f"Timeout waiting for workers, continuing anyway: {e}")
-            
+
             # For DaskExecutor, we need to pass the client in executor_args
             # since run_uproot_job will instantiate the executor
             result = run_uproot_job(
