@@ -42,8 +42,7 @@ def find_sample_files(input_dir: Path) -> List[Path]:
 def create_submit_file(
     template_file: Path,
     output_file: Path,
-    sample_file: str,
-    num_jobs: int,
+    sample_file_path: Path,
     config: str,
     regions_config: str,
     executor: str,
@@ -51,15 +50,19 @@ def create_submit_file(
     workers: int,
     max_events: str = "",
 ) -> None:
-    """Create a submit file from template with specific settings."""
+    """Create a submit file from template with specific settings.
+    
+    Uses condor's 'queue INPUT from <file>' syntax to create one job per line.
+    """
     with open(template_file, 'r') as f:
         lines = f.readlines()
 
     # Build environment variable string
+    # Use $(INPUT) which will be set by condor from the queue INPUT from file
     env_parts = [
         f'DBL_CONFIG={config}',
         f'DBL_REGIONS_CONFIG={regions_config}',
-        f'DBL_BKG_FILE={sample_file}',
+        f'DBL_INPUT=$(INPUT)',
         f'DBL_EXECUTOR={executor}',
         f'DBL_CHUNK_SIZE={chunk_size}',
         f'DBL_WORKERS={workers}',
@@ -68,6 +71,16 @@ def create_submit_file(
         env_parts.append(f'DBL_MAX_EVENTS={max_events}')
 
     env_vars = ' \\\n'.join(env_parts)
+
+    # Get relative path from condorJobs directory to sample file
+    # Condor will execute from condorJobs directory, so path should be relative to that
+    condor_dir = output_file.parent.parent  # condorJobs directory
+    try:
+        # Get relative path from condorJobs to sample file
+        rel_sample_path = sample_file_path.relative_to(condor_dir)
+    except ValueError:
+        # If not relative, use absolute path
+        rel_sample_path = sample_file_path
 
     # Replace lines
     new_lines = []
@@ -84,9 +97,9 @@ def create_submit_file(
                 i += 1
             continue
 
-        # Replace queue line
+        # Replace queue line with queue INPUT from file syntax
         if line.strip().startswith('queue'):
-            new_lines.append(f'queue {num_jobs}\n')
+            new_lines.append(f'queue INPUT from {rel_sample_path}\n')
             i += 1
             continue
 
@@ -134,8 +147,7 @@ def submit_sample(
     create_submit_file(
         template_file=template_file,
         output_file=temp_submit,
-        sample_file=sample_filename,
-        num_jobs=num_files,
+        sample_file_path=sample_file,
         config=config,
         regions_config=regions_config,
         executor=executor,
@@ -294,7 +306,7 @@ Examples:
     logs_dir = condor_dir / 'logs'
     logs_output_dir = logs_dir / 'output'
     logs_error_dir = logs_dir / 'error'
-    
+
     for log_dir in [logs_dir, logs_output_dir, logs_error_dir]:
         log_dir.mkdir(parents=True, exist_ok=True)
 
@@ -307,7 +319,7 @@ Examples:
     for submit_file in submitfiles_dir.glob('submit_*.sub'):
         if submit_file.is_file():
             existing_submit_files.append(submit_file)
-    
+
     if existing_submit_files:
         if not args.dry_run:
             deleted_count = 0
