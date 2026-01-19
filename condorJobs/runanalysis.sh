@@ -19,14 +19,19 @@ ulimit -s unlimited
 
 # Get repository directory from environment variable (set at submission time)
 # This is the path from where condor jobs are submitted, not the condor cwd
-DBL_DIR="${DBL_REPO_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
-cd "${DBL_DIR}"
+DBL_REPO_DIR="${DBL_REPO_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+
+# Change to condor working directory (where files are transferred)
+# But use DBL_REPO_DIR for repository paths (like .local directory)
+CONDOR_CWD="$(pwd)"
+cd "${CONDOR_CWD}"
 
 echo "=========================================="
 echo "DarkBottomLine Condor Job"
 echo "=========================================="
 echo "Job ID: ${1:-0}"
-echo "Working directory: ${DBL_DIR}"
+echo "Repository directory: ${DBL_REPO_DIR}"
+echo "Condor working directory: ${CONDOR_CWD}"
 echo "Date: $(date)"
 echo ""
 
@@ -59,7 +64,8 @@ fi
 
 # Set up DarkBottomLine environment
 echo "Setting up DarkBottomLine environment..."
-LOCAL_DIR="${DBL_DIR}/.local"
+# Use .local directory from repository location (submission machine), not condor cwd
+LOCAL_DIR="${DBL_REPO_DIR}/.local"
 PYTHON_VERSION=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null || echo "3.9")
 SITE_PACKAGES_DIR="${LOCAL_DIR}/lib/python${PYTHON_VERSION}/site-packages"
 LOCAL_BIN_DIR="${LOCAL_DIR}/bin"
