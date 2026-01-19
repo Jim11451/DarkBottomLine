@@ -145,7 +145,6 @@ def run_analysis_futures(
         "Events",
         processor_instance,
         executor=executor,
-        executor_args={"workers": workers, "chunksize": chunksize},
         chunksize=chunksize,
         maxchunks=maxchunks,
     )
@@ -200,7 +199,7 @@ def run_analysis_dask(
                 "Events",
                 processor_instance,
                 executor=executor,
-                executor_args={"client": client, "flatten": True, "retries": 3},
+                executor_args={"flatten": True, "retries": 3},
                 chunksize=chunksize,
                 maxchunks=maxchunks,
             )
