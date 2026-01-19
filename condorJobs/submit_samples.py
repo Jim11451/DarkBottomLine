@@ -270,7 +270,7 @@ Examples:
 
     # Get script directory
     condor_dir = Path(__file__).parent
-    
+
     # Handle input directory path
     if args.input_dir.is_absolute():
         input_dir = args.input_dir
@@ -287,6 +287,15 @@ Examples:
     if not args.template.exists():
         print(f"✗ Error: Template file not found: {args.template}")
         sys.exit(1)
+
+    # Create log directories inside condorJobs
+    logs_dir = condor_dir / 'logs'
+    logs_output_dir = logs_dir / 'output'
+    logs_error_dir = logs_dir / 'error'
+    
+    for log_dir in [logs_dir, logs_output_dir, logs_error_dir]:
+        log_dir.mkdir(parents=True, exist_ok=True)
+        print(f"✓ Created/verified directory: {log_dir}")
 
     # Find sample files
     sample_files = find_sample_files(input_dir)
