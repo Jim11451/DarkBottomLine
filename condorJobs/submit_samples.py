@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 """
-Simple script to submit condor jobs for background files.
+Simple script to submit condor jobs for sample files.
 
-For each background file (bkg_*.txt):
+For each sample file (*.txt in samplefiles/):
   - Counts the number of ROOT files in it
   - Submits N condor jobs (one job per file)
-  - Each background gets its own condor cluster
+  - Each sample gets its own condor cluster
 
 Usage:
-    python3 submit_backgrounds.py [options]
+    python3 submit_samples.py [options]
 
 Example:
-    python3 submit_backgrounds.py --input-dir input --config configs/2022.yaml
+    python3 submit_samples.py --input-dir samplefiles --config configs/2022.yaml
 """
 
 import argparse
@@ -22,10 +22,10 @@ from pathlib import Path
 from typing import List, Tuple
 
 
-def count_files_in_background(bkg_file: Path) -> int:
-    """Count non-empty, non-comment lines in a background file."""
+def count_files_in_sample(sample_file: Path) -> int:
+    """Count non-empty, non-comment lines in a sample file."""
     count = 0
-    with open(bkg_file, 'r') as f:
+    with open(sample_file, 'r') as f:
         for line in f:
             line = line.strip()
             if line and not line.startswith('#'):
@@ -33,16 +33,16 @@ def count_files_in_background(bkg_file: Path) -> int:
     return count
 
 
-def find_background_files(input_dir: Path) -> List[Path]:
-    """Find all bkg_*.txt files in the input directory."""
-    bkg_files = sorted(input_dir.glob('bkg_*.txt'))
-    return bkg_files
+def find_sample_files(input_dir: Path) -> List[Path]:
+    """Find all *.txt files in the input directory."""
+    sample_files = sorted(input_dir.glob('*.txt'))
+    return sample_files
 
 
 def create_submit_file(
     template_file: Path,
     output_file: Path,
-    bkg_file: str,
+    sample_file: str,
     num_jobs: int,
     config: str,
     regions_config: str,
@@ -54,27 +54,27 @@ def create_submit_file(
     """Create a submit file from template with specific settings."""
     with open(template_file, 'r') as f:
         lines = f.readlines()
-    
+
     # Build environment variable string
     env_parts = [
         f'DBL_CONFIG={config}',
         f'DBL_REGIONS_CONFIG={regions_config}',
-        f'DBL_BKG_FILE={bkg_file}',
+        f'DBL_BKG_FILE={sample_file}',
         f'DBL_EXECUTOR={executor}',
         f'DBL_CHUNK_SIZE={chunk_size}',
         f'DBL_WORKERS={workers}',
     ]
     if max_events:
         env_parts.append(f'DBL_MAX_EVENTS={max_events}')
-    
+
     env_vars = ' \\\n'.join(env_parts)
-    
+
     # Replace lines
     new_lines = []
     i = 0
     while i < len(lines):
         line = lines[i]
-        
+
         # Replace environment block
         if line.strip().startswith('environment ='):
             new_lines.append(f'environment = "{env_vars}"\n')
@@ -83,22 +83,22 @@ def create_submit_file(
             while i < len(lines) and ('\\' in lines[i] or lines[i].strip().endswith('"') or not lines[i].strip()):
                 i += 1
             continue
-        
+
         # Replace queue line
         if line.strip().startswith('queue'):
             new_lines.append(f'queue {num_jobs}\n')
             i += 1
             continue
-        
+
         new_lines.append(line)
         i += 1
-    
+
     with open(output_file, 'w') as f:
         f.writelines(new_lines)
 
 
-def submit_background(
-    bkg_file: Path,
+def submit_sample(
+    sample_file: Path,
     condor_dir: Path,
     template_file: Path,
     config: str,
@@ -109,30 +109,30 @@ def submit_background(
     max_events: str,
     dry_run: bool = False,
 ) -> Tuple[str, int]:
-    """Submit condor jobs for a single background file."""
-    bkg_name = bkg_file.stem  # e.g., "bkg_ttbar" from "bkg_ttbar.txt"
-    bkg_filename = bkg_file.name  # e.g., "bkg_ttbar.txt"
-    
-    # Count files in background
-    num_files = count_files_in_background(bkg_file)
-    
+    """Submit condor jobs for a single sample file."""
+    sample_name = sample_file.stem  # e.g., "Zto2Nu-2Jets_..." from "Zto2Nu-2Jets_....txt"
+    sample_filename = sample_file.name  # e.g., "Zto2Nu-2Jets_....txt"
+
+    # Count files in sample
+    num_files = count_files_in_sample(sample_file)
+
     if num_files == 0:
-        print(f"⚠  Skipping {bkg_filename}: No files found")
-        return bkg_name, 0
-    
+        print(f"⚠  Skipping {sample_filename}: No files found")
+        return sample_name, 0
+
     print(f"\n{'='*60}")
-    print(f"Background: {bkg_filename}")
+    print(f"Sample: {sample_filename}")
     print(f"{'='*60}")
-    print(f"  Files in background: {num_files}")
+    print(f"  Files in sample: {num_files}")
     print(f"  Will submit: {num_files} jobs (1 job per file)")
-    
+
     # Create temporary submit file
-    temp_submit = condor_dir / f"submit_{bkg_name}.sub"
-    
+    temp_submit = condor_dir / f"submit_{sample_name}.sub"
+
     create_submit_file(
         template_file=template_file,
         output_file=temp_submit,
-        bkg_file=bkg_filename,
+        sample_file=sample_filename,
         num_jobs=num_files,
         config=config,
         regions_config=regions_config,
@@ -141,12 +141,12 @@ def submit_background(
         workers=workers,
         max_events=max_events,
     )
-    
+
     if dry_run:
         print(f"  [DRY RUN] Would submit: condor_submit {temp_submit}")
         print(f"  [DRY RUN] Submit file created: {temp_submit}")
-        return bkg_name, num_files
-    
+        return sample_name, num_files
+
     # Submit to condor
     try:
         result = subprocess.run(
@@ -155,7 +155,7 @@ def submit_background(
             text=True,
             check=True,
         )
-        
+
         # Extract cluster ID from output
         cluster_id = None
         for line in result.stdout.split('\n'):
@@ -165,63 +165,67 @@ def submit_background(
                     if part.isdigit():
                         cluster_id = part
                         break
-        
+
         print(f"  ✓ Submitted cluster: {cluster_id}")
         print(f"  ✓ Jobs: {num_files} (one per file)")
         print(f"  ✓ Each file will run on a separate node")
-        
-        return bkg_name, num_files
-        
+
+        return sample_name, num_files
+
     except subprocess.CalledProcessError as e:
         print(f"  ✗ Error submitting: {e}")
         print(f"  stderr: {e.stderr}")
-        return bkg_name, 0
+        return sample_name, 0
     except FileNotFoundError:
         print(f"  ✗ Error: condor_submit not found. Are you on a condor-enabled system?")
-        return bkg_name, 0
+        return sample_name, 0
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Submit condor jobs for background files',
+        description='Submit condor jobs for sample files',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Submit all bkg_*.txt files in input/ directory
-  python3 submit_backgrounds.py
+  # Submit all *.txt files in samplefiles/ directory
+  python3 submit_samples.py
 
   # Specify input directory
-  python3 submit_backgrounds.py --input-dir input
+  python3 submit_samples.py --input-dir samplefiles
 
   # Dry run (don't actually submit)
-  python3 submit_backgrounds.py --dry-run
+  python3 submit_samples.py --dry-run
 
   # Custom configuration
-  python3 submit_backgrounds.py --config configs/2022.yaml --workers 8
+  python3 submit_samples.py --config configs/2022.yaml --workers 8
         """
     )
-    
+
+    # Default to samplefiles directory relative to script location
+    condor_dir = Path(__file__).parent
+    default_input_dir = condor_dir / 'samplefiles'
+
     parser.add_argument(
         '--input-dir',
         type=Path,
-        default=Path('input'),
-        help='Directory containing bkg_*.txt files (default: input)',
+        default=default_input_dir,
+        help=f'Directory containing *.txt sample files (default: {default_input_dir})',
     )
-    
+
     parser.add_argument(
         '--config',
         type=str,
         default='configs/2022.yaml',
         help='Configuration file (default: configs/2022.yaml)',
     )
-    
+
     parser.add_argument(
         '--regions-config',
         type=str,
         default='configs/regions.yaml',
         help='Regions configuration file (default: configs/regions.yaml)',
     )
-    
+
     parser.add_argument(
         '--executor',
         type=str,
@@ -229,83 +233,83 @@ Examples:
         choices=['iterative', 'futures', 'dask'],
         help='Executor type (default: futures)',
     )
-    
+
     parser.add_argument(
         '--chunk-size',
         type=int,
         default=50000,
         help='Chunk size for futures/dask (default: 50000)',
     )
-    
+
     parser.add_argument(
         '--workers',
         type=int,
         default=4,
         help='Number of workers (default: 4)',
     )
-    
+
     parser.add_argument(
         '--max-events',
         type=str,
         default='',
         help='Maximum events to process (optional)',
     )
-    
+
     parser.add_argument(
         '--template',
         type=Path,
         default=Path(__file__).parent / 'submit.sub',
         help='Template submit file (default: submit.sub)',
     )
-    
+
     parser.add_argument(
         '--dry-run',
         action='store_true',
         help='Show what would be submitted without actually submitting',
     )
-    
+
     args = parser.parse_args()
-    
+
     # Get script directory
     condor_dir = Path(__file__).parent
-    input_dir = args.input_dir if args.input_dir.is_absolute() else condor_dir.parent / args.input_dir
-    
+    input_dir = args.input_dir if args.input_dir.is_absolute() else condor_dir / args.input_dir
+
     # Check input directory exists
     if not input_dir.exists():
         print(f"✗ Error: Input directory not found: {input_dir}")
         sys.exit(1)
-    
+
     # Check template file exists
     if not args.template.exists():
         print(f"✗ Error: Template file not found: {args.template}")
         sys.exit(1)
-    
-    # Find background files
-    bkg_files = find_background_files(input_dir)
-    
-    if not bkg_files:
-        print(f"✗ No bkg_*.txt files found in {input_dir}")
+
+    # Find sample files
+    sample_files = find_sample_files(input_dir)
+
+    if not sample_files:
+        print(f"✗ No *.txt files found in {input_dir}")
         sys.exit(1)
-    
+
     print("="*60)
     print("DarkBottomLine Condor Job Submission")
     print("="*60)
     print(f"Input directory: {input_dir}")
-    print(f"Found {len(bkg_files)} background file(s):")
-    for bkg in bkg_files:
-        num_files = count_files_in_background(bkg)
-        print(f"  - {bkg.name}: {num_files} files")
+    print(f"Found {len(sample_files)} sample file(s):")
+    for sample in sample_files:
+        num_files = count_files_in_sample(sample)
+        print(f"  - {sample.name}: {num_files} files")
     print()
-    
+
     if args.dry_run:
         print("⚠  DRY RUN MODE - No jobs will be submitted")
         print()
-    
-    # Submit each background
+
+    # Submit each sample
     results = []
-    for bkg_file in bkg_files:
-        bkg_name, num_jobs = submit_background(
-            bkg_file=bkg_file,
+    for sample_file in sample_files:
+        sample_name, num_jobs = submit_sample(
+            sample_file=sample_file,
             condor_dir=condor_dir,
             template_file=args.template,
             config=args.config,
@@ -316,23 +320,23 @@ Examples:
             max_events=args.max_events,
             dry_run=args.dry_run,
         )
-        results.append((bkg_name, num_jobs))
-    
+        results.append((sample_name, num_jobs))
+
     # Summary
     print("\n" + "="*60)
     print("Summary")
     print("="*60)
     total_jobs = 0
-    for bkg_name, num_jobs in results:
+    for sample_name, num_jobs in results:
         if num_jobs > 0:
-            print(f"  {bkg_name}: {num_jobs} jobs")
+            print(f"  {sample_name}: {num_jobs} jobs")
             total_jobs += num_jobs
         else:
-            print(f"  {bkg_name}: Failed or skipped")
-    
+            print(f"  {sample_name}: Failed or skipped")
+
     print(f"\nTotal jobs submitted: {total_jobs}")
-    print("\nEach background runs on separate condor cluster.")
-    print("Each file from a background runs on a separate node.")
+    print("\nEach sample runs on separate condor cluster.")
+    print("Each file from a sample runs on a separate node.")
     print("\nMonitor jobs with: condor_q")
 
 
