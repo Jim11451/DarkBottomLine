@@ -105,13 +105,20 @@ INPUT_SPEC="${DBL_INPUT:-}"
 
 if [ -n "${BKG_FILE}" ]; then
     # Mode 1: Process individual files from a background file
-    # BKG_FILE should be like "bkg_ttbar.txt" or "input/bkg_ttbar.txt"
+    # BKG_FILE is provided as just the filename (e.g., "WtoLNu-2Jets_....txt")
+    # It will be transferred by condor to the working directory
+    # If it doesn't contain a path, assume it's in samplefiles/ directory
     if [[ ! "${BKG_FILE}" == *"/"* ]]; then
-        BKG_FILE="input/${BKG_FILE}"
+        BKG_FILE="samplefiles/${BKG_FILE}"
     fi
 
+    # Check if file exists (it should be transferred by condor)
     if [ ! -f "${BKG_FILE}" ]; then
-        echo "✗ Error: Background file not found: ${BKG_FILE}"
+        echo "✗ Error: Sample file not found: ${BKG_FILE}"
+        echo "  Looking for file in current directory..."
+        echo "  Current directory: $(pwd)"
+        echo "  Files in current directory:"
+        ls -la | head -10
         exit 1
     fi
 
