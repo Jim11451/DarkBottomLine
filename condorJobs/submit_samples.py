@@ -126,8 +126,10 @@ def submit_sample(
     print(f"  Files in sample: {num_files}")
     print(f"  Will submit: {num_files} jobs (1 job per file)")
 
-    # Create temporary submit file
-    temp_submit = condor_dir / f"submit_{sample_name}.sub"
+    # Create temporary submit file in submitfiles directory
+    submitfiles_dir = condor_dir / 'submitfiles'
+    submitfiles_dir.mkdir(parents=True, exist_ok=True)
+    temp_submit = submitfiles_dir / f"submit_{sample_name}.sub"
 
     create_submit_file(
         template_file=template_file,
@@ -296,6 +298,30 @@ Examples:
     for log_dir in [logs_dir, logs_output_dir, logs_error_dir]:
         log_dir.mkdir(parents=True, exist_ok=True)
 
+    # Create submitfiles directory (will create if doesn't exist)
+    submitfiles_dir = condor_dir / 'submitfiles'
+    submitfiles_dir.mkdir(parents=True, exist_ok=True)
+
+    # Delete existing submit files from previous jobs (automatic cleanup)
+    existing_submit_files = []
+    for submit_file in submitfiles_dir.glob('submit_*.sub'):
+        if submit_file.is_file():
+            existing_submit_files.append(submit_file)
+    
+    if existing_submit_files:
+        if not args.dry_run:
+            deleted_count = 0
+            for submit_file in existing_submit_files:
+                try:
+                    submit_file.unlink()
+                    deleted_count += 1
+                except Exception as e:
+                    print(f"  ✗ Error deleting {submit_file}: {e}")
+            if deleted_count > 0:
+                print(f"✓ Deleted {deleted_count} old submit file(s) from previous jobs")
+        else:
+            print(f"  [DRY RUN] Would delete {len(existing_submit_files)} old submit file(s)")
+
     # Check for existing log files and prompt to delete
     existing_logs = []
     for log_dir in [logs_output_dir, logs_error_dir, logs_dir]:
@@ -304,7 +330,7 @@ Examples:
             for log_file in log_dir.glob('dbl.*'):
                 if log_file.is_file():
                     existing_logs.append(log_file)
-    
+
     if existing_logs and not args.dry_run:
         print(f"\n⚠  Found {len(existing_logs)} existing log file(s) from previous jobs:")
         # Show first few files
@@ -312,7 +338,7 @@ Examples:
             print(f"  - {log_file}")
         if len(existing_logs) > 5:
             print(f"  ... and {len(existing_logs) - 5} more")
-        
+
         response = input("\nDo you want to delete these log files? [y/N]: ").strip().lower()
         if response in ['y', 'yes']:
             deleted_count = 0
