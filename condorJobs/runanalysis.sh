@@ -7,6 +7,9 @@ set -x  # Debug mode - show commands
 # This is the path from where condor jobs are submitted, not the condor cwd
 DBL_REPO_DIR="${DBL_REPO_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 
+# Save condor cwd before changing directories (where transferred files are)
+CONDOR_CWD="$(pwd)"
+
 # Change to repository directory (like the working script)
 cd "${DBL_REPO_DIR}"
 
@@ -68,13 +71,20 @@ PROC_ID="${1:-0}"
 BKG_FILE="${DBL_BKG_FILE:-}"
 
 if [ -n "${BKG_FILE}" ]; then
-    # Check if file exists (it should be transferred by condor)
+    # Background file is in repository: condorJobs/samplefiles/filename.txt
+    # Since we're in DBL_REPO_DIR, the path is condorJobs/samplefiles/filename.txt
+    if [[ ! "${BKG_FILE}" == *"/"* ]]; then
+        BKG_FILE="condorJobs/samplefiles/${BKG_FILE}"
+    fi
+    
+    # Check if file exists in repository directory
     if [ ! -f "${BKG_FILE}" ]; then
         echo "✗ Error: Sample file not found: ${BKG_FILE}"
-        echo "  Looking for file in current directory..."
+        echo "  Looking for file in repository directory..."
+        echo "  Repository directory: ${DBL_REPO_DIR}"
         echo "  Current directory: $(pwd)"
-        echo "  Files in current directory:"
-        ls -la | head -10
+        echo "  Files in condorJobs/samplefiles/:"
+        ls -la condorJobs/samplefiles/ 2>/dev/null || echo "    (directory not found)"
         exit 1
     fi
     # Show that the file was found
