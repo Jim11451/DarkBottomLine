@@ -56,8 +56,14 @@ def create_submit_file(
     with open(template_file, 'r') as f:
         lines = f.readlines()
 
+    # Get repository directory (absolute path from submission location)
+    condor_dir = output_file.parent.parent  # condorJobs directory
+    repo_dir = condor_dir.parent  # Repository root directory
+    repo_dir_abs = repo_dir.resolve()
+
     # Build environment variable string
     env_parts = [
+        f'DBL_REPO_DIR={repo_dir_abs}',
         f'DBL_CONFIG={config}',
         f'DBL_REGIONS_CONFIG={regions_config}',
         f'DBL_BKG_FILE={sample_file}',

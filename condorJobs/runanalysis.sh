@@ -17,9 +17,9 @@ set -x  # Debug mode - show commands
 # Set unlimited stack size
 ulimit -s unlimited
 
-# Get script directory and set up paths
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DBL_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+# Get repository directory from environment variable (set at submission time)
+# This is the path from where condor jobs are submitted, not the condor cwd
+DBL_DIR="${DBL_REPO_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 cd "${DBL_DIR}"
 
 echo "=========================================="
