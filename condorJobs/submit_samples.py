@@ -77,10 +77,9 @@ def create_submit_file(
 
     env_vars = ' \\\n'.join(env_parts)
 
-    # Get sample file path for transfer_input_files
-    # Source path in repository: samplefiles/filename.txt
-    # File will be transferred to cwd on the condor node (not in samplefiles/ subdirectory)
-    sample_file_path = f'samplefiles/{sample_file}'
+    # Background file is in repository, accessible from condor nodes
+    # No need to transfer - file is read from DBL_REPO_DIR/condorJobs/samplefiles/
+    # So we don't need transfer_input_files for the background file
 
     # Get username and user ID for x509userproxy path
     try:
@@ -113,9 +112,9 @@ def create_submit_file(
                 i += 1
             continue
 
-        # Replace transfer_input_files line
+        # Remove transfer_input_files line (background file is in repository, not transferred)
         if line.strip().startswith('transfer_input_files'):
-            new_lines.append(f'transfer_input_files = {sample_file_path}\n')
+            # Skip this line - background file is read from repository directory
             i += 1
             continue
 
