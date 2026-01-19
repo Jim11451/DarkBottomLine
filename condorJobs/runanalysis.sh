@@ -89,10 +89,14 @@ fi
 
 # Verify Python and required modules
 echo ""
-echo "Verifying environment..."
-if ! command -v python3 &> /dev/null; then
-    echo "✗ Error: python3 not found"
-    exit 1
+echo "Verifying installation..."
+if python3 -c "from darkbottomline import DarkBottomLineProcessor; print('✓ Import successful')" 2>/dev/null; then
+    echo "✓ Package can be imported"
+else
+    echo "⚠ Package installed but import test failed"
+    echo "  Make sure .local is in your PYTHONPATH:"
+    echo "  export PYTHONPATH=\"${LOCAL_DIR}:\$PYTHONPATH\""
+    echo "  export PYTHONPATH=\"${SITE_PACKAGES_DIR}:\$PYTHONPATH\""
 fi
 
 python3 --version
