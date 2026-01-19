@@ -202,14 +202,12 @@ Examples:
     )
 
     # Default to samplefiles directory relative to script location
-    condor_dir = Path(__file__).parent
-    default_input_dir = condor_dir / 'samplefiles'
-
+    # We'll resolve this in main() to handle both absolute and relative paths
     parser.add_argument(
         '--input-dir',
         type=Path,
-        default=default_input_dir,
-        help=f'Directory containing *.txt sample files (default: {default_input_dir})',
+        default='samplefiles',
+        help='Directory containing *.txt sample files (default: samplefiles relative to script)',
     )
 
     parser.add_argument(
@@ -272,7 +270,13 @@ Examples:
 
     # Get script directory
     condor_dir = Path(__file__).parent
-    input_dir = args.input_dir if args.input_dir.is_absolute() else condor_dir / args.input_dir
+    
+    # Handle input directory path
+    if args.input_dir.is_absolute():
+        input_dir = args.input_dir
+    else:
+        # Resolve relative to condor_dir (where the script is located)
+        input_dir = (condor_dir / args.input_dir).resolve()
 
     # Check input directory exists
     if not input_dir.exists():
