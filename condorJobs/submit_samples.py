@@ -16,6 +16,7 @@ Example:
 
 import argparse
 import os
+import pwd
 import subprocess
 import sys
 from pathlib import Path
@@ -73,11 +74,27 @@ def create_submit_file(
     # The sample file is in samplefiles/ directory
     sample_file_path = f'samplefiles/{sample_file}'
 
+    # Get username and user ID for x509userproxy path
+    try:
+        username = os.getenv('USER') or os.getenv('LOGNAME') or pwd.getpwuid(os.getuid()).pw_name
+        uid = os.getuid()
+        first_letter = username[0].lower()
+        x509_path = f'/afs/cern.ch/user/{first_letter}/{username}/private/x509up_u{uid}'
+    except Exception:
+        # Fallback to template value if detection fails
+        x509_path = '/afs/cern.ch/user/u/username/private/x509up_u98885'
+
     # Replace lines
     new_lines = []
     i = 0
     while i < len(lines):
         line = lines[i]
+
+        # Replace x509userproxy line
+        if line.strip().startswith('x509userproxy'):
+            new_lines.append(f'x509userproxy = {x509_path}\n')
+            i += 1
+            continue
 
         # Replace environment block
         if line.strip().startswith('environment ='):

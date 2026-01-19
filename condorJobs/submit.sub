@@ -1,6 +1,6 @@
 universe = vanilla
 use_x509userproxy = true
-x509userproxy = /afs/cern.ch/user/u/username/private/x509up_u98885
+x509userproxy = /afs/cern.ch/user/$(FirstLetter)/$(Username)/private/x509up_u$(Uid)
 
 executable = runanalysis.sh
 arguments = $(ProcId)
