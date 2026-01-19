@@ -1,7 +1,7 @@
 #!/bin/bash
 # Condor job script for DarkBottomLine analysis
 # Usage: runanalysis.sh <ProcId> [optional arguments]
-# 
+#
 # Environment variables that can be set in submit.sub:
 #   DBL_CONFIG: Configuration file (default: configs/2022.yaml)
 #   DBL_REGIONS_CONFIG: Regions config file (default: configs/regions.yaml)
@@ -109,41 +109,41 @@ if [ -n "${BKG_FILE}" ]; then
     if [[ ! "${BKG_FILE}" == *"/"* ]]; then
         BKG_FILE="input/${BKG_FILE}"
     fi
-    
+
     if [ ! -f "${BKG_FILE}" ]; then
         echo "✗ Error: Background file not found: ${BKG_FILE}"
         exit 1
     fi
-    
+
     # Extract background name
     BKG_NAME=$(basename "${BKG_FILE}" .txt)
-    
+
     # Get the specific file from the background file based on ProcId
     # Skip comments and empty lines
     INPUT_LINE=$(grep -v '^#' "${BKG_FILE}" | grep -v '^$' | sed -n "$((PROC_ID + 1))p")
-    
+
     if [ -z "${INPUT_LINE}" ]; then
         TOTAL_FILES=$(grep -v '^#' "${BKG_FILE}" | grep -v '^$' | wc -l)
         echo "✗ Error: ProcId ${PROC_ID} exceeds number of files in ${BKG_FILE} (${TOTAL_FILES} files)"
         exit 1
     fi
-    
+
     INPUT="${INPUT_LINE}"
     FILE_INDEX="${PROC_ID}"
     echo "✓ Processing file ${FILE_INDEX} from ${BKG_FILE}"
     echo "  Input file: ${INPUT}"
-    
+
     # Generate output name: regions_<bkg_name>_<file_index>.pkl
     if [ -z "${DBL_OUTPUT}" ]; then
         OUTPUT="outputs/hists/regions_${BKG_NAME}_${FILE_INDEX}.pkl"
     else
         OUTPUT="${DBL_OUTPUT}"
     fi
-    
+
 elif [ -n "${INPUT_SPEC}" ]; then
     # Mode 2: DBL_INPUT is set - use it directly
     INPUT="${INPUT_SPEC}"
-    
+
     # Extract background name from input file if it's a .txt file
     if [[ "${INPUT_SPEC}" == *.txt ]]; then
         BKG_NAME=$(basename "${INPUT_SPEC}" .txt)
@@ -151,7 +151,7 @@ elif [ -n "${INPUT_SPEC}" ]; then
     else
         BKG_NAME="data_${PROC_ID}"
     fi
-    
+
     # Generate output name
     if [ -z "${DBL_OUTPUT}" ]; then
         if [[ "${INPUT_SPEC}" == *.txt ]]; then
@@ -162,7 +162,7 @@ elif [ -n "${INPUT_SPEC}" ]; then
     else
         OUTPUT="${DBL_OUTPUT}"
     fi
-    
+
 else
     # Mode 3: Default - use single default file
     INPUT="root://cms-xrd-global.cern.ch//store/mc/Run3Summer22NanoAODv12/DYto2L-2Jets_MLL-50_PTLL-40to100_2J_TuneCP5_13p6TeV_amcatnloFXFX-pythia8/NANOAODSIM/130X_mcRun3_2022_realistic_v5-v1/2560000/30624dd1-ba96-465e-a745-8ff472357277.root"
