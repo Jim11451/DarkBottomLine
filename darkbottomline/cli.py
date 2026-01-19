@@ -219,7 +219,7 @@ def run_analyzer(args):
                         "Events",
                         coffea_analyzer,
                         executor=DaskExecutor,
-                        executor_args={"client": client, "flatten": True, "retries": 3},
+                        executor_args={"client": client},
                         chunksize=chunksize if chunksize != 50000 else 200000,  # Default 200k for dask
                         maxchunks=maxchunks,
                     )

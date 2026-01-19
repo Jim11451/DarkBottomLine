@@ -199,7 +199,7 @@ def run_analysis_dask(
                 "Events",
                 processor_instance,
                 executor=DaskExecutor,
-                executor_args={"client": client, "flatten": True, "retries": 3},
+                executor_args={"client": client},
                 chunksize=chunksize,
                 maxchunks=maxchunks,
             )
