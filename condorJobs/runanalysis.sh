@@ -76,7 +76,7 @@ if [ -n "${BKG_FILE}" ]; then
     if [[ ! "${BKG_FILE}" == *"/"* ]]; then
         BKG_FILE="condorJobs/samplefiles/${BKG_FILE}"
     fi
-    
+
     # Check if file exists in repository directory
     if [ ! -f "${BKG_FILE}" ]; then
         echo "✗ Error: Sample file not found: ${BKG_FILE}"
