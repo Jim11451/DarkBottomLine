@@ -88,10 +88,11 @@ python3 condorJobs/submit_samples.py --help
 1. **Update paths in `submit.sub`**:
    - Change `x509userproxy` to your proxy path (line 3)
 
-2. **Create output directories**:
+2. **Create log directories** (automatically created by submit_samples.py):
    ```bash
-   mkdir -p condorJobs/output condorJobs/error condorJobs/log
+   mkdir -p condorJobs/logs/output condorJobs/logs/error
    ```
+   Note: The script will create these automatically, but you can create them manually if needed.
 
 3. **Initialize voms proxy** (if needed):
    ```bash
@@ -133,8 +134,8 @@ condor_q
 condor_q 12345
 
 # Check job logs
-tail -f condorJobs/output/dbl.*.out
-tail -f condorJobs/error/dbl.*.err
+tail -f condorJobs/logs/output/dbl.*.out
+tail -f condorJobs/logs/error/dbl.*.err
 ```
 
 ## Advanced: Manual Submission
@@ -152,7 +153,7 @@ If you need to submit manually (not recommended):
 
 ## Troubleshooting
 
-1. **Jobs held**: Check error logs in `condorJobs/error/` directory
+1. **Jobs held**: Check error logs in `condorJobs/logs/error/` directory
 2. **Proxy expired**: Re-run `voms-proxy-init` and copy to AFS
 3. **File not found**: Check that input files exist and paths are correct
 4. **Memory issues**: Increase `request_memory` in submit.sub or reduce `--chunk-size`
