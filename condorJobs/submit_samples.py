@@ -67,7 +67,7 @@ def create_submit_file(
         config_path = repo_dir_abs / config
     else:
         config_path = Path(config)
-    
+
     if not os.path.isabs(regions_config):
         regions_config_path = repo_dir_abs / regions_config
     else:
