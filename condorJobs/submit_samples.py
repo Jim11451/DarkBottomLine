@@ -134,7 +134,8 @@ def submit_sample(
     create_submit_file(
         template_file=template_file,
         output_file=temp_submit,
-        sample_file_path=sample_file,
+        sample_file=sample_filename,
+        num_jobs=num_files,
         config=config,
         regions_config=regions_config,
         executor=executor,
