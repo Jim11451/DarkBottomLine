@@ -29,10 +29,10 @@ request_cpus = 4
 
 environment = "DBL_CONFIG=configs/2022.yaml \
 DBL_REGIONS_CONFIG=configs/regions.yaml \
-DBL_INPUT=$(INPUT) \
+DBL_BKG_FILE=bkg_ttbar.txt \
 DBL_EXECUTOR=futures \
 DBL_CHUNK_SIZE=50000 \
 DBL_WORKERS=4 \
 DBL_MAX_EVENTS="
 
-queue INPUT from samplefiles/Zto2Nu-2Jets_PTNuNu-40to100_2J_TuneCP5_13p6TeV_amcatnloFXFX-pythia8.txt
+queue 1
