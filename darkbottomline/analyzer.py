@@ -654,7 +654,7 @@ if COFFEA_AVAILABLE:
                         events, objects, self.config
                     )
                     logging.info(f"Chunk: {len(selected_events)}/{len(events)} events passed selection")
-                    
+
                     # Save this chunk to a temporary file (for cross-worker compatibility)
                     # Use unique filename to avoid conflicts across workers
                     import time
@@ -663,7 +663,7 @@ if COFFEA_AVAILABLE:
                     chunk_file = os.path.join(self._temp_dir, f"chunk_{chunk_id}.pkl")
                     with open(chunk_file, 'wb') as f:
                         pickle.dump({"events": selected_events, "objects": selected_objects}, f, protocol=pickle.HIGHEST_PROTOCOL)
-                    
+
                     # Add to accumulator list (this will be merged across workers)
                     self.accumulator["_event_selection_chunk_files"].add(chunk_file)
                     logging.info(f"Saved chunk to {chunk_file}, added to accumulator")
@@ -709,19 +709,19 @@ if COFFEA_AVAILABLE:
             import os
             import pickle
             import awkward as ak
-            
+
             # Get chunk files from accumulator (merged across all workers)
             chunk_files = accumulator.get("_event_selection_chunk_files", [])
-            
+
             logging.info(f"postprocess called: event_selection_output={self.event_selection_output}, chunk_files={len(chunk_files)}")
-            
+
             # Save accumulated event selection if requested
             if self.event_selection_output and chunk_files:
                 try:
                     # Load all chunks from files
                     all_selected_events_list = []
                     all_selected_objects_list = []
-                    
+
                     for chunk_file in chunk_files:
                         if os.path.exists(chunk_file):
                             try:
@@ -734,11 +734,11 @@ if COFFEA_AVAILABLE:
                                         all_selected_objects_list.append(objects)
                             except Exception as e:
                                 logging.warning(f"Failed to load chunk file {chunk_file}: {e}")
-                    
+
                     if all_selected_events_list:
                         # Concatenate all selected events and objects from all chunks
                         all_selected_events = ak.concatenate(all_selected_events_list)
-                        
+
                         # Merge selected objects dictionaries
                         all_selected_objects = {}
                         if all_selected_objects_list:
@@ -754,7 +754,7 @@ if COFFEA_AVAILABLE:
                                         arrays_to_concat.append(obj_dict[key])
                                 if arrays_to_concat:
                                     all_selected_objects[key] = ak.concatenate(arrays_to_concat)
-                        
+
                         # Save using base processor helper
                         logging.info(f"Saving accumulated event-level selection to {self.event_selection_output}")
                         self.analyzer.base_processor._save_event_selection(
@@ -768,14 +768,14 @@ if COFFEA_AVAILABLE:
                             logging.error(f"✗ File {self.event_selection_output} was not created!")
                     else:
                         logging.warning(f"No selected events found in {len(chunk_files)} chunk files, skipping event_selection_output save")
-                    
+
                     # Clean up temporary files and directories
                     # Collect all unique temp directories from chunk file paths
                     temp_dirs = set()
                     for chunk_file in chunk_files:
                         if os.path.exists(chunk_file):
                             temp_dirs.add(os.path.dirname(chunk_file))
-                    
+
                     # Remove chunk files and temp directories
                     for chunk_file in chunk_files:
                         try:
@@ -783,7 +783,7 @@ if COFFEA_AVAILABLE:
                                 os.remove(chunk_file)
                         except Exception as e:
                             logging.warning(f"Failed to remove chunk file {chunk_file}: {e}")
-                    
+
                     for temp_dir in temp_dirs:
                         try:
                             if os.path.exists(temp_dir) and os.path.isdir(temp_dir):
@@ -791,7 +791,7 @@ if COFFEA_AVAILABLE:
                                 logging.debug(f"Removed temp directory {temp_dir}")
                         except Exception as e:
                             logging.warning(f"Failed to remove temp directory {temp_dir}: {e}")
-                            
+
                 except Exception as e:
                     logging.error(f"Failed to save accumulated event selection to {self.event_selection_output}: {e}", exc_info=True)
 

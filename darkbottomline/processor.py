@@ -289,7 +289,7 @@ class DarkBottomLineProcessor:
         if not output_file.endswith('.root'):
             # Replace extension with .root
             root_file = os.path.splitext(output_file)[0] + '.root'
-        
+
         try:
             import uproot
             import numpy as np
