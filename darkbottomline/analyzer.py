@@ -621,9 +621,18 @@ if COFFEA_AVAILABLE:
                 "region_validation": processor.dict_accumulator({}),
                 "metadata": processor.dict_accumulator({}),
             })
-            # Store selected events/objects for event_selection_output (accumulate across chunks)
-            self._selected_events_chunks = []
-            self._selected_objects_chunks = []
+            # Store selected events/objects for event_selection_output
+            # Use file-based approach for cross-worker compatibility
+            if event_selection_output:
+                import tempfile
+                import os
+                import uuid
+                # Create a temp directory for chunk files (use a unique ID to avoid conflicts)
+                unique_id = str(uuid.uuid4())[:8]
+                self._temp_dir = tempfile.mkdtemp(prefix=f"dbl_event_selection_{unique_id}_")
+                # Store chunk file list in accumulator (for cross-worker merging)
+                # Note: each worker may have its own temp_dir, but we'll handle that in postprocess
+                self.accumulator["_event_selection_chunk_files"] = processor.list_accumulator([])
 
         def process(self, events: ak.Array) -> Dict[str, Any]:
             """Process events using the analyzer."""
@@ -633,6 +642,9 @@ if COFFEA_AVAILABLE:
             # If event_selection_output is requested, collect selected events from this chunk
             if self.event_selection_output:
                 try:
+                    import os
+                    import pickle
+                    import awkward as ak
                     logging.info(f"Collecting selected events for event_selection_output from chunk ({len(events)} events)")
                     from .selections import apply_selection
                     from .objects import build_objects
@@ -642,10 +654,19 @@ if COFFEA_AVAILABLE:
                         events, objects, self.config
                     )
                     logging.info(f"Chunk: {len(selected_events)}/{len(events)} events passed selection")
-                    # Store for later accumulation
-                    self._selected_events_chunks.append(selected_events)
-                    self._selected_objects_chunks.append(selected_objects)
-                    logging.info(f"Stored chunk. Total chunks collected: {len(self._selected_events_chunks)}")
+                    
+                    # Save this chunk to a temporary file (for cross-worker compatibility)
+                    # Use unique filename to avoid conflicts across workers
+                    import time
+                    import uuid
+                    chunk_id = f"{int(time.time() * 1000000)}_{uuid.uuid4().hex[:8]}"
+                    chunk_file = os.path.join(self._temp_dir, f"chunk_{chunk_id}.pkl")
+                    with open(chunk_file, 'wb') as f:
+                        pickle.dump({"events": selected_events, "objects": selected_objects}, f, protocol=pickle.HIGHEST_PROTOCOL)
+                    
+                    # Add to accumulator list (this will be merged across workers)
+                    self.accumulator["_event_selection_chunk_files"].add(chunk_file)
+                    logging.info(f"Saved chunk to {chunk_file}, added to accumulator")
                 except Exception as e:
                     logging.warning(f"Failed to collect selected events for event_selection_output: {e}", exc_info=True)
             # Update accumulator with results
@@ -685,55 +706,93 @@ if COFFEA_AVAILABLE:
 
         def postprocess(self, accumulator: Dict[str, Any]) -> Dict[str, Any]:
             """Post-process results."""
-            logging.info(f"postprocess called: event_selection_output={self.event_selection_output}, chunks={len(self._selected_events_chunks)}")
+            import os
+            import pickle
+            import awkward as ak
+            
+            # Get chunk files from accumulator (merged across all workers)
+            chunk_files = accumulator.get("_event_selection_chunk_files", [])
+            
+            logging.info(f"postprocess called: event_selection_output={self.event_selection_output}, chunk_files={len(chunk_files)}")
+            
             # Save accumulated event selection if requested
-            if self.event_selection_output and self._selected_events_chunks:
+            if self.event_selection_output and chunk_files:
                 try:
-                    import awkward as ak
-                    # Filter out empty chunks
-                    non_empty_chunks = [
-                        (events, objects)
-                        for events, objects in zip(self._selected_events_chunks, self._selected_objects_chunks)
-                        if len(events) > 0
-                    ]
-
-                    if non_empty_chunks:
-                        # Concatenate all selected events and objects from all non-empty chunks
-                        events_list = [events for events, _ in non_empty_chunks]
-                        all_selected_events = ak.concatenate(events_list)
-
+                    # Load all chunks from files
+                    all_selected_events_list = []
+                    all_selected_objects_list = []
+                    
+                    for chunk_file in chunk_files:
+                        if os.path.exists(chunk_file):
+                            try:
+                                with open(chunk_file, 'rb') as f:
+                                    chunk_data = pickle.load(f)
+                                    events = chunk_data.get("events")
+                                    objects = chunk_data.get("objects")
+                                    if events is not None and len(events) > 0:
+                                        all_selected_events_list.append(events)
+                                        all_selected_objects_list.append(objects)
+                            except Exception as e:
+                                logging.warning(f"Failed to load chunk file {chunk_file}: {e}")
+                    
+                    if all_selected_events_list:
+                        # Concatenate all selected events and objects from all chunks
+                        all_selected_events = ak.concatenate(all_selected_events_list)
+                        
                         # Merge selected objects dictionaries
                         all_selected_objects = {}
-                        objects_list = [objects for _, objects in non_empty_chunks]
-                        if objects_list:
+                        if all_selected_objects_list:
                             # Get all keys from all chunks
                             all_keys = set()
-                            for obj_dict in objects_list:
+                            for obj_dict in all_selected_objects_list:
                                 all_keys.update(obj_dict.keys())
                             # Concatenate arrays for each key
                             for key in all_keys:
                                 arrays_to_concat = []
-                                for obj_dict in objects_list:
+                                for obj_dict in all_selected_objects_list:
                                     if key in obj_dict and len(obj_dict[key]) > 0:
                                         arrays_to_concat.append(obj_dict[key])
                                 if arrays_to_concat:
                                     all_selected_objects[key] = ak.concatenate(arrays_to_concat)
-
+                        
                         # Save using base processor helper
                         logging.info(f"Saving accumulated event-level selection to {self.event_selection_output}")
                         self.analyzer.base_processor._save_event_selection(
                             self.event_selection_output, all_selected_events, all_selected_objects
                         )
                         # Verify file was created
-                        import os
                         if os.path.exists(self.event_selection_output):
                             file_size = os.path.getsize(self.event_selection_output)
-                            logging.info(f"✓ Saved accumulated event-level selection from {len(non_empty_chunks)} chunks ({len(all_selected_events)} events) to {self.event_selection_output} ({file_size} bytes)")
+                            logging.info(f"✓ Saved accumulated event-level selection from {len(all_selected_events_list)} chunks ({len(all_selected_events)} events) to {self.event_selection_output} ({file_size} bytes)")
                         else:
                             logging.error(f"✗ File {self.event_selection_output} was not created!")
                     else:
-                        logging.warning(f"No selected events found across {len(self._selected_events_chunks)} chunks, skipping event_selection_output save")
+                        logging.warning(f"No selected events found in {len(chunk_files)} chunk files, skipping event_selection_output save")
+                    
+                    # Clean up temporary files and directories
+                    # Collect all unique temp directories from chunk file paths
+                    temp_dirs = set()
+                    for chunk_file in chunk_files:
+                        if os.path.exists(chunk_file):
+                            temp_dirs.add(os.path.dirname(chunk_file))
+                    
+                    # Remove chunk files and temp directories
+                    for chunk_file in chunk_files:
+                        try:
+                            if os.path.exists(chunk_file):
+                                os.remove(chunk_file)
+                        except Exception as e:
+                            logging.warning(f"Failed to remove chunk file {chunk_file}: {e}")
+                    
+                    for temp_dir in temp_dirs:
+                        try:
+                            if os.path.exists(temp_dir) and os.path.isdir(temp_dir):
+                                os.rmdir(temp_dir)
+                                logging.debug(f"Removed temp directory {temp_dir}")
+                        except Exception as e:
+                            logging.warning(f"Failed to remove temp directory {temp_dir}: {e}")
+                            
                 except Exception as e:
-                    logging.warning(f"Failed to save accumulated event selection to {self.event_selection_output}: {e}")
+                    logging.error(f"Failed to save accumulated event selection to {self.event_selection_output}: {e}", exc_info=True)
 
             return accumulator
