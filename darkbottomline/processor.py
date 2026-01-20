@@ -283,67 +283,79 @@ class DarkBottomLineProcessor:
             logging.warning(f"Failed to save raw awkward backup to {raw_backup}: {e}")
 
 
-        # write a simple TTree with scalar branches for easy inspection in ROOT.
-        if output_file.endswith('.root'):
+        # Always write a ROOT file alongside the pickle file for easy inspection
+        # If output_file ends with .root, use it directly; otherwise create .root version
+        root_file = output_file
+        if not output_file.endswith('.root'):
+            # Replace extension with .root
+            root_file = os.path.splitext(output_file)[0] + '.root'
+        
+        try:
+            import uproot
+            import numpy as np
+
+            logging.info(f"Creating ROOT file: {root_file}")
+
+            # Prepare flat scalar branches
+            branches = {}
+            # Standard event identifiers
             try:
-                import uproot
-                import numpy as np
+                branches['event'] = ak.to_numpy(events['event'])
+            except Exception:
+                branches['event'] = np.asarray(ak.to_list(events.get('event', [])))
+            try:
+                branches['run'] = ak.to_numpy(events['run'])
+            except Exception:
+                branches['run'] = np.asarray(ak.to_list(events.get('run', [])))
+            try:
+                branches['luminosityBlock'] = ak.to_numpy(events['luminosityBlock'])
+            except Exception:
+                branches['luminosityBlock'] = np.asarray(ak.to_list(events.get('luminosityBlock', [])))
 
-                # Prepare flat scalar branches
-                branches = {}
-                # Standard event identifiers
+            # MET scalars
+            def _get_met_field_array(field_name_v15, field_name_v12):
+                if field_name_v15 in events.fields:
+                    return ak.to_numpy(events[field_name_v15])
+                elif field_name_v12 in events.fields:
+                    return ak.to_numpy(events[field_name_v12])
+                else:
+                    # Return an empty array of appropriate size if neither field exists
+                    return np.asarray([]) if len(events) == 0 else np.zeros(len(events), dtype=float)
+
+            branches['PFMET_pt'] = _get_met_field_array('PFMET_pt', 'MET_pt')
+            branches['PFMET_phi'] = _get_met_field_array('PFMET_phi', 'MET_phi')
+            branches['PFMET_significance'] = _get_met_field_array('PFMET_significance', 'MET_significance')
+
+            # Object multiplicities
+            def safe_num(obj_key):
+                arr = objects.get(obj_key, ak.Array([]))
                 try:
-                    branches['event'] = ak.to_numpy(events['event'])
+                    return ak.to_numpy(ak.num(arr, axis=1))
                 except Exception:
-                    branches['event'] = np.asarray(ak.to_list(events.get('event', [])))
-                try:
-                    branches['run'] = ak.to_numpy(events['run'])
-                except Exception:
-                    branches['run'] = np.asarray(ak.to_list(events.get('run', [])))
-                try:
-                    branches['luminosityBlock'] = ak.to_numpy(events['luminosityBlock'])
-                except Exception:
-                    branches['luminosityBlock'] = np.asarray(ak.to_list(events.get('luminosityBlock', [])))
+                    return np.asarray([0] * len(branches.get('event', [])))
 
-                # MET scalars
-                def _get_met_field_array(field_name_v15, field_name_v12):
-                    if field_name_v15 in events.fields:
-                        return ak.to_numpy(events[field_name_v15])
-                    elif field_name_v12 in events.fields:
-                        return ak.to_numpy(events[field_name_v12])
-                    else:
-                        # Return an empty array of appropriate size if neither field exists
-                        return np.asarray([]) if len(events) == 0 else np.zeros(len(events), dtype=float)
+            branches['n_muons'] = safe_num('muons')
+            branches['n_electrons'] = safe_num('electrons')
+            branches['n_taus'] = safe_num('taus')
+            branches['n_jets'] = safe_num('jets')
+            branches['n_bjets'] = safe_num('bjets')
 
-                branches['PFMET_pt'] = _get_met_field_array('PFMET_pt', 'MET_pt')
-                branches['PFMET_phi'] = _get_met_field_array('PFMET_phi', 'MET_phi')
-                branches['PFMET_significance'] = _get_met_field_array('PFMET_significance', 'MET_significance')
+            # Write to ROOT
+            outdir = os.path.dirname(root_file)
+            if outdir:
+                os.makedirs(outdir, exist_ok=True)
 
-                # Object multiplicities
-                def safe_num(obj_key):
-                    arr = objects.get(obj_key, ak.Array([]))
-                    try:
-                        return ak.to_numpy(ak.num(arr, axis=1))
-                    except Exception:
-                        return np.asarray([0] * len(branches.get('event', [])))
+            with uproot.recreate(root_file) as f:
+                f['Events'] = branches
 
-                branches['n_muons'] = safe_num('muons')
-                branches['n_electrons'] = safe_num('electrons')
-                branches['n_taus'] = safe_num('taus')
-                branches['n_jets'] = safe_num('jets')
-                branches['n_bjets'] = safe_num('bjets')
-
-                # Write to ROOT
-                outdir = os.path.dirname(output_file)
-                if outdir:
-                    os.makedirs(outdir, exist_ok=True)
-
-                with uproot.recreate(output_file) as f:
-                    f['Events'] = branches
-
-                logging.info(f"Event selection exported to ROOT file {output_file}")
-            except Exception as e:
-                logging.warning(f"Failed to write ROOT event selection to {output_file}: {e}")
+            # Verify file was created
+            if os.path.exists(root_file):
+                file_size = os.path.getsize(root_file)
+                logging.info(f"✓ Event selection exported to ROOT file {root_file} ({file_size} bytes, {len(events)} events)")
+            else:
+                logging.error(f"✗ ROOT file {root_file} was not created!")
+        except Exception as e:
+            logging.error(f"Failed to write ROOT event selection to {root_file}: {e}", exc_info=True)
 
     def get_histogram_statistics(self) -> Dict[str, Dict[str, float]]:
         """
