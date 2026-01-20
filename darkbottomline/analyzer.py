@@ -631,8 +631,9 @@ if COFFEA_AVAILABLE:
                 unique_id = str(uuid.uuid4())[:8]
                 self._temp_dir = tempfile.mkdtemp(prefix=f"dbl_event_selection_{unique_id}_")
                 # Store chunk file list in accumulator (for cross-worker merging)
+                # Use a dict accumulator with file paths as keys (for easy merging across workers)
                 # Note: each worker may have its own temp_dir, but we'll handle that in postprocess
-                self.accumulator["_event_selection_chunk_files"] = processor.list_accumulator([])
+                self.accumulator["_event_selection_chunk_files"] = processor.dict_accumulator({})
 
         def process(self, events: ak.Array) -> Dict[str, Any]:
             """Process events using the analyzer."""
@@ -664,8 +665,9 @@ if COFFEA_AVAILABLE:
                     with open(chunk_file, 'wb') as f:
                         pickle.dump({"events": selected_events, "objects": selected_objects}, f, protocol=pickle.HIGHEST_PROTOCOL)
 
-                    # Add to accumulator list (this will be merged across workers)
-                    self.accumulator["_event_selection_chunk_files"].add(chunk_file)
+                    # Add to accumulator dict (this will be merged across workers)
+                    # Use file path as key with dummy value for easy merging
+                    self.accumulator["_event_selection_chunk_files"][chunk_file] = True
                     logging.info(f"Saved chunk to {chunk_file}, added to accumulator")
                 except Exception as e:
                     logging.warning(f"Failed to collect selected events for event_selection_output: {e}", exc_info=True)
@@ -711,7 +713,12 @@ if COFFEA_AVAILABLE:
             import awkward as ak
 
             # Get chunk files from accumulator (merged across all workers)
-            chunk_files = accumulator.get("_event_selection_chunk_files", [])
+            # File paths are stored as keys in the dict accumulator
+            chunk_files_acc = accumulator.get("_event_selection_chunk_files", {})
+            if isinstance(chunk_files_acc, dict):
+                chunk_files = list(chunk_files_acc.keys())
+            else:
+                chunk_files = []
 
             logging.info(f"postprocess called: event_selection_output={self.event_selection_output}, chunk_files={len(chunk_files)}")
 
