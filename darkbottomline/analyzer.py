@@ -601,9 +601,10 @@ if COFFEA_AVAILABLE:
         Coffea-compatible processor wrapper for multi-region analyzer.
         """
 
-        def __init__(self, config: Dict[str, Any], regions_config_path: str):
+        def __init__(self, config: Dict[str, Any], regions_config_path: str, event_selection_output: Optional[str] = None):
             self.config = config
             self.regions_config_path = regions_config_path
+            self.event_selection_output = event_selection_output
             self.analyzer = DarkBottomLineAnalyzer(config, regions_config_path)
             # Initialize accumulator for Coffea
             self.accumulator = processor.dict_accumulator({
@@ -613,10 +614,30 @@ if COFFEA_AVAILABLE:
                 "region_validation": processor.dict_accumulator({}),
                 "metadata": processor.dict_accumulator({}),
             })
+            # Store selected events/objects for event_selection_output (accumulate across chunks)
+            self._selected_events_chunks = []
+            self._selected_objects_chunks = []
 
         def process(self, events: ak.Array) -> Dict[str, Any]:
             """Process events using the analyzer."""
+            # Don't save event_selection_output per chunk, accumulate instead
             result = self.analyzer.process(events, event_selection_output=None)
+
+            # If event_selection_output is requested, collect selected events from this chunk
+            if self.event_selection_output:
+                try:
+                    from .selections import apply_selection
+                    from .objects import build_objects
+                    # Apply event-level selection to get selected events
+                    objects = build_objects(events, self.config)
+                    selected_events, selected_objects, _ = apply_selection(
+                        events, objects, self.config
+                    )
+                    # Store for later accumulation
+                    self._selected_events_chunks.append(selected_events)
+                    self._selected_objects_chunks.append(selected_objects)
+                except Exception as e:
+                    logging.warning(f"Failed to collect selected events for event_selection_output: {e}")
             # Update accumulator with results
             if "regions" in result:
                 for key, value in result["regions"].items():
@@ -654,4 +675,47 @@ if COFFEA_AVAILABLE:
 
         def postprocess(self, accumulator: Dict[str, Any]) -> Dict[str, Any]:
             """Post-process results."""
+            # Save accumulated event selection if requested
+            if self.event_selection_output and self._selected_events_chunks:
+                try:
+                    import awkward as ak
+                    # Filter out empty chunks
+                    non_empty_chunks = [
+                        (events, objects)
+                        for events, objects in zip(self._selected_events_chunks, self._selected_objects_chunks)
+                        if len(events) > 0
+                    ]
+
+                    if non_empty_chunks:
+                        # Concatenate all selected events and objects from all non-empty chunks
+                        events_list = [events for events, _ in non_empty_chunks]
+                        all_selected_events = ak.concatenate(events_list)
+
+                        # Merge selected objects dictionaries
+                        all_selected_objects = {}
+                        objects_list = [objects for _, objects in non_empty_chunks]
+                        if objects_list:
+                            # Get all keys from all chunks
+                            all_keys = set()
+                            for obj_dict in objects_list:
+                                all_keys.update(obj_dict.keys())
+                            # Concatenate arrays for each key
+                            for key in all_keys:
+                                arrays_to_concat = []
+                                for obj_dict in objects_list:
+                                    if key in obj_dict and len(obj_dict[key]) > 0:
+                                        arrays_to_concat.append(obj_dict[key])
+                                if arrays_to_concat:
+                                    all_selected_objects[key] = ak.concatenate(arrays_to_concat)
+
+                        # Save using base processor helper
+                        self.analyzer.base_processor._save_event_selection(
+                            self.event_selection_output, all_selected_events, all_selected_objects
+                        )
+                        logging.info(f"Saved accumulated event-level selection from {len(non_empty_chunks)} chunks ({len(all_selected_events)} events) to {self.event_selection_output}")
+                    else:
+                        logging.warning(f"No selected events found across {len(self._selected_events_chunks)} chunks, skipping event_selection_output save")
+                except Exception as e:
+                    logging.warning(f"Failed to save accumulated event selection to {self.event_selection_output}: {e}")
+
             return accumulator

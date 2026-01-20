@@ -199,7 +199,9 @@ def run_analyzer(args):
             if args.max_events:
                 maxchunks = (args.max_events + chunksize - 1) // chunksize
 
-            coffea_analyzer = DarkBottomLineAnalyzerCoffeaProcessor(config, args.regions_config)
+            coffea_analyzer = DarkBottomLineAnalyzerCoffeaProcessor(
+                config, args.regions_config, event_selection_output=args.event_selection_output
+            )
 
             if args.executor == "futures":
                 result = run_uproot_job(
