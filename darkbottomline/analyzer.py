@@ -149,10 +149,17 @@ class DarkBottomLineAnalyzer:
                 )
                 # Save using base processor helper
                 try:
+                    logging.info(f"Saving pre-region event selection to {event_selection_output} ({len(selected_events)} events)")
                     self.base_processor._save_event_selection(event_selection_output, selected_events, selected_objects)
-                    logging.info(f"Saved pre-region event selection to {event_selection_output}")
+                    # Verify file was created
+                    import os
+                    if os.path.exists(event_selection_output):
+                        file_size = os.path.getsize(event_selection_output)
+                        logging.info(f"✓ Pre-region event selection saved successfully to {event_selection_output} ({file_size} bytes)")
+                    else:
+                        logging.error(f"✗ File {event_selection_output} was not created!")
                 except Exception as e:
-                    logging.warning(f"Failed to save pre-region event selection to {event_selection_output}: {e}")
+                    logging.error(f"Failed to save pre-region event selection to {event_selection_output}: {e}", exc_info=True)
 
                 # Continue analysis using the selected events/objects
                 events = selected_events
@@ -626,6 +633,7 @@ if COFFEA_AVAILABLE:
             # If event_selection_output is requested, collect selected events from this chunk
             if self.event_selection_output:
                 try:
+                    logging.info(f"Collecting selected events for event_selection_output from chunk ({len(events)} events)")
                     from .selections import apply_selection
                     from .objects import build_objects
                     # Apply event-level selection to get selected events
@@ -633,11 +641,13 @@ if COFFEA_AVAILABLE:
                     selected_events, selected_objects, _ = apply_selection(
                         events, objects, self.config
                     )
+                    logging.info(f"Chunk: {len(selected_events)}/{len(events)} events passed selection")
                     # Store for later accumulation
                     self._selected_events_chunks.append(selected_events)
                     self._selected_objects_chunks.append(selected_objects)
+                    logging.info(f"Stored chunk. Total chunks collected: {len(self._selected_events_chunks)}")
                 except Exception as e:
-                    logging.warning(f"Failed to collect selected events for event_selection_output: {e}")
+                    logging.warning(f"Failed to collect selected events for event_selection_output: {e}", exc_info=True)
             # Update accumulator with results
             if "regions" in result:
                 for key, value in result["regions"].items():
@@ -675,6 +685,7 @@ if COFFEA_AVAILABLE:
 
         def postprocess(self, accumulator: Dict[str, Any]) -> Dict[str, Any]:
             """Post-process results."""
+            logging.info(f"postprocess called: event_selection_output={self.event_selection_output}, chunks={len(self._selected_events_chunks)}")
             # Save accumulated event selection if requested
             if self.event_selection_output and self._selected_events_chunks:
                 try:
@@ -709,10 +720,17 @@ if COFFEA_AVAILABLE:
                                     all_selected_objects[key] = ak.concatenate(arrays_to_concat)
 
                         # Save using base processor helper
+                        logging.info(f"Saving accumulated event-level selection to {self.event_selection_output}")
                         self.analyzer.base_processor._save_event_selection(
                             self.event_selection_output, all_selected_events, all_selected_objects
                         )
-                        logging.info(f"Saved accumulated event-level selection from {len(non_empty_chunks)} chunks ({len(all_selected_events)} events) to {self.event_selection_output}")
+                        # Verify file was created
+                        import os
+                        if os.path.exists(self.event_selection_output):
+                            file_size = os.path.getsize(self.event_selection_output)
+                            logging.info(f"✓ Saved accumulated event-level selection from {len(non_empty_chunks)} chunks ({len(all_selected_events)} events) to {self.event_selection_output} ({file_size} bytes)")
+                        else:
+                            logging.error(f"✗ File {self.event_selection_output} was not created!")
                     else:
                         logging.warning(f"No selected events found across {len(self._selected_events_chunks)} chunks, skipping event_selection_output save")
                 except Exception as e:

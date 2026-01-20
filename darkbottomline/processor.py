@@ -87,10 +87,17 @@ class DarkBottomLineProcessor:
         # Optionally save event-level selection results immediately and continue
         if event_selection_output:
             try:
+                logging.info(f"Saving event-level selection to {event_selection_output} ({len(selected_events)} events)")
                 self._save_event_selection(event_selection_output, selected_events, selected_objects)
-                logging.info(f"Saved event-level selection to {event_selection_output}")
+                # Verify file was created
+                import os
+                if os.path.exists(event_selection_output):
+                    file_size = os.path.getsize(event_selection_output)
+                    logging.info(f"✓ Event selection saved successfully to {event_selection_output} ({file_size} bytes)")
+                else:
+                    logging.error(f"✗ File {event_selection_output} was not created!")
             except Exception as e:
-                logging.warning(f"Failed to save event-level selection to {event_selection_output}: {e}")
+                logging.error(f"Failed to save event-level selection to {event_selection_output}: {e}", exc_info=True)
 
         # Calculate corrections and weights
         print("Step 3: Calculating corrections and weights...")
@@ -275,7 +282,7 @@ class DarkBottomLineProcessor:
         except Exception as e:
             logging.warning(f"Failed to save raw awkward backup to {raw_backup}: {e}")
 
-        
+
         # write a simple TTree with scalar branches for easy inspection in ROOT.
         if output_file.endswith('.root'):
             try:

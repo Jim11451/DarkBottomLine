@@ -248,6 +248,11 @@ def run_analyzer(args):
             else:
                 raise ValueError(f"Executor {args.executor} not available or not supported")
 
+            # Ensure postprocess is called (run_uproot_job should call it, but be explicit)
+            if hasattr(coffea_analyzer, 'postprocess'):
+                logging.info("Calling postprocess to finalize event_selection_output if needed...")
+                result = coffea_analyzer.postprocess(result)
+
             # Save results
             analyzer = DarkBottomLineAnalyzer(config, args.regions_config)
             analyzer.accumulator = result
