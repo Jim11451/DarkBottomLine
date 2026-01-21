@@ -32,7 +32,7 @@ environment = "DBL_REPO_DIR=/path/to/repository \
 DBL_CONFIG=\$(DBL_REPO_DIR)/configs/2022.yaml \
 DBL_REGIONS_CONFIG=\$(DBL_REPO_DIR)/configs/regions.yaml \
 DBL_BKG_FILE=bkg_ttbar.txt \
-DBL_EXECUTOR=futures \
+DBL_EXECUTOR=dask \
 DBL_CHUNK_SIZE=50000 \
 DBL_WORKERS=4 \
 DBL_MAX_EVENTS=10000"

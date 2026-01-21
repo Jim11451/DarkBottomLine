@@ -115,8 +115,13 @@ if [ -n "${BKG_FILE}" ]; then
     # Generate output name: regions_<bkg_name>_<file_index>.pkl
     if [ -z "${DBL_OUTPUT}" ]; then
         OUTPUT="outputs/hists/regions_${BKG_NAME}_${FILE_INDEX}.pkl"
+        EVENT_SELECTION_OUTPUT="outputs/hists/event_selected_${BKG_NAME}_${FILE_INDEX}.pkl"
     else
         OUTPUT="${DBL_OUTPUT}"
+        # Generate event selection output based on main output path
+        OUTPUT_BASE=$(dirname "${OUTPUT}")
+        OUTPUT_NAME=$(basename "${OUTPUT}" .pkl)
+        EVENT_SELECTION_OUTPUT="${OUTPUT_BASE}/event_selected_${OUTPUT_NAME#regions_}.pkl"
     fi
 
 else
@@ -124,6 +129,7 @@ else
     INPUT="root://cms-xrd-global.cern.ch//store/mc/Run3Summer22NanoAODv12/DYto2L-2Jets_MLL-50_PTLL-40to100_2J_TuneCP5_13p6TeV_amcatnloFXFX-pythia8/NANOAODSIM/130X_mcRun3_2022_realistic_v5-v1/2560000/30624dd1-ba96-465e-a745-8ff472357277.root"
     BKG_NAME="default_${PROC_ID}"
     OUTPUT="outputs/hists/regions_${BKG_NAME}.pkl"
+    EVENT_SELECTION_OUTPUT="outputs/hists/event_selected_${BKG_NAME}.pkl"
     echo "⚠ No DBL_BKG_FILE set, using default input file"
 fi
 
@@ -186,6 +192,7 @@ CMD="${CMD} --config ${CONFIG}"
 CMD="${CMD} --regions-config ${REGIONS_CONFIG}"
 CMD="${CMD} --input ${INPUT}"
 CMD="${CMD} --output ${OUTPUT}"
+CMD="${CMD} --event-selection-output ${EVENT_SELECTION_OUTPUT}"
 CMD="${CMD} --executor ${EXECUTOR}"
 CMD="${CMD} --workers ${WORKERS}"
 
