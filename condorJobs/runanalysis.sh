@@ -197,6 +197,7 @@ CMD="${CMD} --executor ${EXECUTOR}"
 CMD="${CMD} --workers ${WORKERS}"
 
 # Add chunk-size if executor supports it
+# CHUNK_SIZE can be a number or "auto" for automatic optimization
 if [ "${EXECUTOR}" = "futures" ] || [ "${EXECUTOR}" = "dask" ]; then
     CMD="${CMD} --chunk-size ${CHUNK_SIZE}"
 fi

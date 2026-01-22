@@ -21,7 +21,7 @@ import pwd
 import subprocess
 import sys
 from pathlib import Path
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Union
 
 # Import chunk optimization utilities
 try:
@@ -94,7 +94,7 @@ def create_submit_file(
     config: str,
     regions_config: str,
     executor: str,
-    chunk_size: int,
+    chunk_size: Union[int, str],
     workers: int,
     max_events: str = "",
 ) -> None:
@@ -207,25 +207,17 @@ def submit_sample(
     print(f"  Files in sample: {num_files}")
     print(f"  Will submit: {num_files} jobs (1 job per file)")
 
-    # Auto-optimize chunk size if not provided
+    # Handle chunk size: if None (auto), pass "auto" string to let each worker optimize
+    # Otherwise, use the provided value (int or "auto" string)
     if chunk_size is None:
-        print(f"  Auto-optimizing chunk size for {sample_filename}...")
-        try:
-            optimized_chunk_size = optimize_chunk_size_for_sample_file(
-                sample_file=sample_file,
-                available_memory_mb=request_memory_mb,
-                num_workers=workers,
-                executor=executor,
-            )
-            print(f"  ✓ Optimal chunk size: {optimized_chunk_size:,} events")
-            chunk_size = optimized_chunk_size
-        except Exception as e:
-            logging.warning(f"Failed to auto-optimize chunk size: {e}")
-            # Fallback to default
-            chunk_size = 50000 if executor == "futures" else 200000
-            print(f"  ⚠  Using default chunk size: {chunk_size:,} events")
+        chunk_size_str = "auto"
+        print(f"  Using chunk size: auto (will optimize per job based on input file)")
     else:
-        print(f"  Using chunk size: {chunk_size:,} events")
+        chunk_size_str = str(chunk_size)
+        if chunk_size_str == "auto":
+            print(f"  Using chunk size: auto (will optimize per job based on input file)")
+        else:
+            print(f"  Using chunk size: {chunk_size_str}")
 
     # Create temporary submit file in submitfiles directory
     submitfiles_dir = condor_dir / 'submitfiles'
@@ -240,7 +232,7 @@ def submit_sample(
         config=config,
         regions_config=regions_config,
         executor=executor,
-        chunk_size=chunk_size,
+        chunk_size=chunk_size_str,
         workers=workers,
         max_events=max_events,
     )
