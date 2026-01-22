@@ -20,6 +20,10 @@ except ImportError:
     logging.warning("Coffea not available. Using fallback implementation.")
 
 from darkbottomline.processor import DarkBottomLineProcessor, DarkBottomLineCoffeaProcessor
+from darkbottomline.utils.chunk_optimizer import (
+    optimize_chunk_size_for_files,
+    parse_chunk_size_arg,
+)
 
 
 def setup_logging(level: str = "INFO"):
@@ -318,8 +322,8 @@ def main():
                        default="iterative", help="Execution backend")
     parser.add_argument("--workers", type=int, default=4,
                        help="Number of parallel workers")
-    parser.add_argument("--chunk-size", type=int, default=50000,
-                       help="Number of events per chunk for futures/dask executors (default: 50000)")
+    parser.add_argument("--chunk-size", type=str, default="50000",
+                       help="Number of events per chunk for futures/dask executors. Use 'auto' for automatic optimization, or specify an integer (default: 50000)")
     parser.add_argument("--max-events", type=int, default=None,
                        help="Maximum number of events to process (converted to maxchunks for run_uproot_job)")
     parser.add_argument("--save-skims", action="store_true",
@@ -343,6 +347,41 @@ def main():
     logging.info("Initializing processor...")
     base_processor = DarkBottomLineProcessor(config)
 
+    # Parse chunk size argument (can be "auto" or int)
+    chunk_size = None
+    if isinstance(args.chunk_size, str):
+        chunk_size = parse_chunk_size_arg(args.chunk_size)
+    else:
+        chunk_size = args.chunk_size
+
+    # Get input files list (needed for auto-optimization and processing)
+    input_files = []
+    if args.input.endswith('.txt'):
+        with open(args.input, 'r') as f:
+            input_files = [line.strip() for line in f if line.strip() and not line.strip().startswith('#')]
+    else:
+        input_files = [args.input]
+
+    # Auto-optimize chunk size if requested
+    if chunk_size is None and args.executor in ["futures", "dask"]:
+        logging.info("Auto-optimizing chunk size based on input files...")
+        try:
+            # Estimate available memory (default: 8GB per worker, conservative)
+            # This is a rough estimate - users can override with explicit chunk-size
+            available_memory_mb = 8000  # 8GB default
+            chunk_size = optimize_chunk_size_for_files(
+                input_files=input_files,
+                available_memory_mb=available_memory_mb,
+                num_workers=args.workers,
+                executor=args.executor,
+            )
+            logging.info(f"Auto-optimized chunk size: {chunk_size:,} events")
+        except Exception as e:
+            logging.warning(f"Failed to auto-optimize chunk size: {e}")
+            # Fallback to defaults
+            chunk_size = 50000 if args.executor == "futures" else 200000
+            logging.info(f"Using default chunk size: {chunk_size:,} events")
+
     # Run analysis
     logging.info(f"Starting analysis with {args.executor} executor...")
     start_time = time.time()
@@ -354,15 +393,8 @@ def main():
         results = run_analysis_iterative(events, base_processor)
     elif args.executor == "futures":
         # Use run_uproot_job with FuturesExecutor
-        input_files = []
-        if args.input.endswith('.txt'):
-            with open(args.input, 'r') as f:
-                input_files = [line.strip() for line in f if line.strip() and not line.strip().startswith('#')]
-        else:
-            input_files = [args.input]
-
         fileset = {"dataset": input_files}
-        chunksize = args.chunk_size
+        chunksize = chunk_size
         maxchunks = None
         if args.max_events:
             # Calculate maxchunks based on max_events and chunksize
@@ -372,15 +404,8 @@ def main():
         results = run_analysis_futures(fileset, coffea_processor, args.workers, chunksize, maxchunks)
     elif args.executor == "dask":
         # Use run_uproot_job with DaskExecutor
-        input_files = []
-        if args.input.endswith('.txt'):
-            with open(args.input, 'r') as f:
-                input_files = [line.strip() for line in f if line.strip() and not line.strip().startswith('#')]
-        else:
-            input_files = [args.input]
-
         fileset = {"dataset": input_files}
-        chunksize = args.chunk_size if args.chunk_size != 50000 else 200000  # Default to 200k for dask
+        chunksize = chunk_size if chunk_size is not None else 200000  # Default to 200k for dask
         maxchunks = None
         if args.max_events:
             maxchunks = (args.max_events + chunksize - 1) // chunksize

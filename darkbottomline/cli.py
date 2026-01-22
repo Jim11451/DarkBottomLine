@@ -15,6 +15,10 @@ from .dnn_trainer import DNNTrainer
 from .dnn_inference import DNNInference
 from .plotting import PlotManager
 from .regions import RegionManager
+from .utils.chunk_optimizer import (
+    optimize_chunk_size_for_files,
+    parse_chunk_size_arg,
+)
 
 # Try to import Coffea for chunk-size support
 try:
@@ -174,12 +178,39 @@ def run_analyzer(args):
         is_txt_input = len(args.input) == 1 and args.input[0].endswith(".txt")
         input_files = _get_input_files(args.input)
 
+        # Parse chunk size argument (can be "auto" or int)
+        chunk_size = None
+        if hasattr(args, 'chunk_size') and args.chunk_size is not None:
+            if isinstance(args.chunk_size, str):
+                chunk_size = parse_chunk_size_arg(args.chunk_size)
+            else:
+                chunk_size = args.chunk_size
+
+        # Auto-optimize chunk size if requested
+        if chunk_size is None and args.executor in ["futures", "dask"]:
+            logging.info("Auto-optimizing chunk size based on input files...")
+            try:
+                # Estimate available memory (default: 8GB per worker, conservative)
+                # This is a rough estimate - users can override with explicit chunk-size
+                available_memory_mb = 8000  # 8GB default
+                chunk_size = optimize_chunk_size_for_files(
+                    input_files=input_files,
+                    available_memory_mb=available_memory_mb,
+                    num_workers=args.workers,
+                    executor=args.executor,
+                )
+                logging.info(f"Auto-optimized chunk size: {chunk_size:,} events")
+            except Exception as e:
+                logging.warning(f"Failed to auto-optimize chunk size: {e}")
+                # Fallback to defaults
+                chunk_size = 50000 if args.executor == "futures" else 200000
+                logging.info(f"Using default chunk size: {chunk_size:,} events")
+
         # Check if we should use Coffea run_uproot_job with chunk-size
         use_coffea_chunking = (
             COFFEA_AVAILABLE and
             args.executor in ["futures", "dask"] and
-            hasattr(args, 'chunk_size') and
-            args.chunk_size is not None
+            chunk_size is not None
         )
 
         if use_coffea_chunking:
@@ -191,10 +222,10 @@ def run_analyzer(args):
                 logging.error("DarkBottomLineAnalyzerCoffeaProcessor not available. Coffea may not be installed.")
                 raise
 
-            logging.info(f"Using Coffea {args.executor} executor with chunk-size={args.chunk_size}")
+            logging.info(f"Using Coffea {args.executor} executor with chunk-size={chunk_size}")
 
             fileset = {"dataset": input_files}
-            chunksize = args.chunk_size
+            chunksize = chunk_size
             maxchunks = None
             if args.max_events:
                 maxchunks = (args.max_events + chunksize - 1) // chunksize
@@ -566,8 +597,8 @@ Examples:
     analyze_parser.add_argument("--executor", choices=["iterative", "futures", "dask"],
                                default="iterative", help="Execution backend")
     analyze_parser.add_argument("--workers", type=int, default=4, help="Number of workers")
-    analyze_parser.add_argument("--chunk-size", type=int, default=None,
-                               help="Number of events per chunk for futures/dask executors (default: 50000 for futures, 200000 for dask). Only used with futures/dask executors.")
+    analyze_parser.add_argument("--chunk-size", type=str, default=None,
+                               help="Number of events per chunk for futures/dask executors. Use 'auto' for automatic optimization, or specify an integer (default: 50000 for futures, 200000 for dask). Only used with futures/dask executors.")
     analyze_parser.add_argument("--max-events", type=int, help="Maximum events to process (converted to maxchunks when using chunk-size)")
     analyze_parser.set_defaults(func=run_analyzer)
 

@@ -15,12 +15,58 @@ Example:
 """
 
 import argparse
+import logging
 import os
 import pwd
 import subprocess
 import sys
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Tuple, Optional
+
+# Import chunk optimization utilities
+try:
+    from darkbottomline.utils.chunk_optimizer import (
+        optimize_chunk_size_for_sample_file,
+        parse_chunk_size_arg,
+    )
+except ImportError:
+    # Fallback if package is not installed (e.g., when running script directly)
+    import sys
+    repo_dir = Path(__file__).parent.parent.parent
+    sys.path.insert(0, str(repo_dir))
+    from darkbottomline.utils.chunk_optimizer import (
+        optimize_chunk_size_for_sample_file,
+        parse_chunk_size_arg,
+    )
+
+
+def get_request_memory_from_template(template_file: Path) -> int:
+    """
+    Extract request_memory value from Condor submit template file.
+
+    Args:
+        template_file: Path to submit.sub template
+
+    Returns:
+        Memory request in MB (default: 8000)
+    """
+    try:
+        with open(template_file, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith('request_memory'):
+                    # Parse: request_memory = 8000
+                    parts = line.split('=')
+                    if len(parts) == 2:
+                        try:
+                            return int(parts[1].strip())
+                        except ValueError:
+                            pass
+    except Exception:
+        pass
+
+    # Default fallback
+    return 8000
 
 
 def count_files_in_sample(sample_file: Path) -> int:
@@ -138,9 +184,10 @@ def submit_sample(
     config: str,
     regions_config: str,
     executor: str,
-    chunk_size: int,
+    chunk_size: Optional[int],
     workers: int,
     max_events: str,
+    request_memory_mb: int = 8000,
     dry_run: bool = False,
 ) -> Tuple[str, int]:
     """Submit condor jobs for a single sample file."""
@@ -159,6 +206,26 @@ def submit_sample(
     print(f"{'='*60}")
     print(f"  Files in sample: {num_files}")
     print(f"  Will submit: {num_files} jobs (1 job per file)")
+
+    # Auto-optimize chunk size if not provided
+    if chunk_size is None:
+        print(f"  Auto-optimizing chunk size for {sample_filename}...")
+        try:
+            optimized_chunk_size = optimize_chunk_size_for_sample_file(
+                sample_file=sample_file,
+                available_memory_mb=request_memory_mb,
+                num_workers=workers,
+                executor=executor,
+            )
+            print(f"  ✓ Optimal chunk size: {optimized_chunk_size:,} events")
+            chunk_size = optimized_chunk_size
+        except Exception as e:
+            logging.warning(f"Failed to auto-optimize chunk size: {e}")
+            # Fallback to default
+            chunk_size = 50000 if executor == "futures" else 200000
+            print(f"  ⚠  Using default chunk size: {chunk_size:,} events")
+    else:
+        print(f"  Using chunk size: {chunk_size:,} events")
 
     # Create temporary submit file in submitfiles directory
     submitfiles_dir = condor_dir / 'submitfiles'
@@ -234,6 +301,12 @@ Examples:
 
   # Custom configuration
   python3 submit_samples.py --config configs/2022.yaml --workers 8
+
+  # Auto-optimize chunk size per sample
+  python3 submit_samples.py --chunk-size auto
+
+  # Use fixed chunk size
+  python3 submit_samples.py --chunk-size 100000
         """
     )
 
@@ -270,9 +343,9 @@ Examples:
 
     parser.add_argument(
         '--chunk-size',
-        type=int,
-        default=50000,
-        help='Chunk size for futures/dask (default: 50000)',
+        type=str,
+        default='50000',
+        help='Chunk size for futures/dask. Use "auto" for automatic optimization based on file characteristics, or specify an integer (default: 50000)',
     )
 
     parser.add_argument(
@@ -304,6 +377,12 @@ Examples:
 
     args = parser.parse_args()
 
+    # Setup logging (warnings level to show optimization messages)
+    logging.basicConfig(
+        level=logging.WARNING,
+        format='%(levelname)s: %(message)s'
+    )
+
     # Get script directory
     condor_dir = Path(__file__).parent
 
@@ -323,6 +402,16 @@ Examples:
     if not args.template.exists():
         print(f"✗ Error: Template file not found: {args.template}")
         sys.exit(1)
+
+    # Parse chunk size argument
+    try:
+        chunk_size = parse_chunk_size_arg(args.chunk_size)
+    except ValueError as e:
+        print(f"✗ Error: {e}")
+        sys.exit(1)
+
+    # Get request_memory from template file
+    request_memory_mb = get_request_memory_from_template(args.template)
 
     # Create log directories inside condorJobs
     logs_dir = condor_dir / 'logs'
@@ -399,6 +488,13 @@ Examples:
     print("="*60)
     print(f"Input directory: {input_dir}")
     print(f"Log directories: {logs_dir}/")
+    print(f"Request memory: {request_memory_mb} MB")
+    print(f"Workers per job: {args.workers}")
+    print(f"Executor: {args.executor}")
+    if chunk_size is None:
+        print(f"Chunk size: AUTO (will optimize per sample)")
+    else:
+        print(f"Chunk size: {chunk_size:,} events")
     print(f"Found {len(sample_files)} sample file(s):")
     for sample in sample_files:
         num_files = count_files_in_sample(sample)
@@ -419,9 +515,10 @@ Examples:
             config=args.config,
             regions_config=args.regions_config,
             executor=args.executor,
-            chunk_size=args.chunk_size,
+            chunk_size=chunk_size,
             workers=args.workers,
             max_events=args.max_events,
+            request_memory_mb=request_memory_mb,
             dry_run=args.dry_run,
         )
         results.append((sample_name, num_jobs))
