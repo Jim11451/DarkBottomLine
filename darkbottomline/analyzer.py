@@ -696,12 +696,48 @@ if COFFEA_AVAILABLE:
             if "region_cutflow" in result:
                 for key, value in result["region_cutflow"].items():
                     if key not in self.accumulator["region_cutflow"]:
-                        self.accumulator["region_cutflow"][key] = value
+                        # Wrap plain dict in dict_accumulator for proper Coffea merging
+                        if isinstance(value, dict):
+                            self.accumulator["region_cutflow"][key] = processor.dict_accumulator(value)
+                        else:
+                            self.accumulator["region_cutflow"][key] = value
                     else:
-                        # Merge cutflow dictionaries
-                        if isinstance(self.accumulator["region_cutflow"][key], dict) and isinstance(value, dict):
-                            for k, v in value.items():
-                                self.accumulator["region_cutflow"][key][k] = self.accumulator["region_cutflow"][key].get(k, 0) + v
+                        # Merge cutflow dictionaries - handle both dict_accumulator and plain dict
+                        if isinstance(value, dict):
+                            # If accumulator value is also a dict_accumulator, merge properly
+                            if hasattr(self.accumulator["region_cutflow"][key], 'add'):
+                                # It's a dict_accumulator, create a temporary one and add
+                                temp_acc = processor.dict_accumulator(value)
+                                self.accumulator["region_cutflow"][key].add(temp_acc)
+                            else:
+                                # It's a plain dict, merge manually
+                                for k, v in value.items():
+                                    if k not in self.accumulator["region_cutflow"][key]:
+                                        self.accumulator["region_cutflow"][key][k] = v
+                                    else:
+                                        self.accumulator["region_cutflow"][key][k] = self.accumulator["region_cutflow"][key][k] + v
+            if "region_validation" in result:
+                # Handle region_validation - wrap in dict_accumulator for proper merging
+                validation = result["region_validation"]
+                if isinstance(validation, dict):
+                    # Merge validation results
+                    for key, value in validation.items():
+                        if key not in self.accumulator["region_validation"]:
+                            # Wrap plain dict/values in dict_accumulator if needed
+                            if isinstance(value, dict):
+                                self.accumulator["region_validation"][key] = processor.dict_accumulator(value)
+                            else:
+                                self.accumulator["region_validation"][key] = value
+                        else:
+                            # Merge validation dictionaries
+                            if isinstance(value, dict):
+                                if hasattr(self.accumulator["region_validation"][key], 'add'):
+                                    temp_acc = processor.dict_accumulator(value)
+                                    self.accumulator["region_validation"][key].add(temp_acc)
+                                else:
+                                    # Plain dict merge
+                                    if isinstance(self.accumulator["region_validation"][key], dict):
+                                        self.accumulator["region_validation"][key].update(value)
             if "metadata" in result:
                 self.accumulator["metadata"].update(result.get("metadata", {}))
             return self.accumulator
