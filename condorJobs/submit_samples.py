@@ -23,21 +23,26 @@ import sys
 from pathlib import Path
 from typing import List, Tuple, Optional, Union
 
-# Import chunk optimization utilities
-try:
-    from darkbottomline.utils.chunk_optimizer import (
-        optimize_chunk_size_for_sample_file,
-        parse_chunk_size_arg,
-    )
-except ImportError:
-    # Fallback if package is not installed (e.g., when running script directly)
-    import sys
-    repo_dir = Path(__file__).parent.parent.parent
-    sys.path.insert(0, str(repo_dir))
-    from darkbottomline.utils.chunk_optimizer import (
-        optimize_chunk_size_for_sample_file,
-        parse_chunk_size_arg,
-    )
+# Parse chunk size argument (simple inline function - no external dependency needed)
+def parse_chunk_size_arg(chunk_size_str: str) -> Optional[int]:
+    """
+    Parse chunk size argument, accepting 'auto' or an integer.
+
+    Args:
+        chunk_size_str: String value from command line
+
+    Returns:
+        None if 'auto', otherwise integer chunk size
+
+    Raises:
+        ValueError: If chunk_size_str is neither 'auto' nor a valid integer
+    """
+    if chunk_size_str.lower() == 'auto':
+        return None
+    try:
+        return int(chunk_size_str)
+    except ValueError:
+        raise ValueError(f"Invalid chunk-size value: {chunk_size_str}. Must be 'auto' or an integer.")
 
 
 def get_request_memory_from_template(template_file: Path) -> int:
