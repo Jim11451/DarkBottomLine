@@ -74,6 +74,35 @@ def get_request_memory_from_template(template_file: Path) -> int:
     return 8000
 
 
+def get_request_cpus_from_template(template_file: Path) -> int:
+    """
+    Extract request_cpus value from Condor submit template file.
+
+    Args:
+        template_file: Path to submit.sub template
+
+    Returns:
+        Number of CPUs/workers (default: 4)
+    """
+    try:
+        with open(template_file, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith('request_cpus'):
+                    # Parse: request_cpus = 4
+                    parts = line.split('=')
+                    if len(parts) == 2:
+                        try:
+                            return int(parts[1].strip())
+                        except ValueError:
+                            pass
+    except Exception:
+        pass
+
+    # Default fallback
+    return 4
+
+
 def count_files_in_sample(sample_file: Path) -> int:
     """Count non-empty, non-comment lines in a sample file."""
     count = 0
@@ -114,6 +143,7 @@ def create_submit_file(
 
     # Build environment variable string
     # Config paths are relative to repository (script will cd to repo directory)
+    # Workers are automatically derived from request_cpus in the template
     env_parts = [
         f'DBL_REPO_DIR={repo_dir_abs}',
         f'DBL_CONFIG={config}',
@@ -407,8 +437,13 @@ Examples:
         print(f"✗ Error: {e}")
         sys.exit(1)
 
-    # Get request_memory from template file
+    # Get request_memory and request_cpus from template file
     request_memory_mb = get_request_memory_from_template(args.template)
+    request_cpus = get_request_cpus_from_template(args.template)
+
+    # Use request_cpus as workers (automatically derived from Condor template)
+    # This ensures workers match the allocated CPUs
+    workers = request_cpus
 
     # Create log directories inside condorJobs
     logs_dir = condor_dir / 'logs'
@@ -486,7 +521,7 @@ Examples:
     print(f"Input directory: {input_dir}")
     print(f"Log directories: {logs_dir}/")
     print(f"Request memory: {request_memory_mb} MB")
-    print(f"Workers per job: {args.workers}")
+    print(f"Workers per job: {workers} (auto-derived from request_cpus={request_cpus})")
     print(f"Executor: {args.executor}")
     if chunk_size is None:
         print(f"Chunk size: AUTO (will optimize per sample)")
@@ -513,7 +548,7 @@ Examples:
             regions_config=args.regions_config,
             executor=args.executor,
             chunk_size=chunk_size,
-            workers=args.workers,
+            workers=workers,  # Use auto-derived workers from request_cpus
             max_events=args.max_events,
             request_memory_mb=request_memory_mb,
             dry_run=args.dry_run,

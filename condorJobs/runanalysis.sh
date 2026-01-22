@@ -65,6 +65,7 @@ EXECUTOR="${DBL_EXECUTOR:-futures}"
 CHUNK_SIZE="${DBL_CHUNK_SIZE:-50000}"
 WORKERS="${DBL_WORKERS:-4}"
 MAX_EVENTS="${DBL_MAX_EVENTS:-}"
+# Workers: Automatically derived from request_cpus in submit file
 
 
 PROC_ID="${1:-0}"
@@ -180,7 +181,7 @@ fi
 echo "Output: ${OUTPUT}"
 echo "Executor: ${EXECUTOR}"
 echo "Chunk Size: ${CHUNK_SIZE}"
-echo "Workers: ${WORKERS}"
+echo "Workers: ${WORKERS} (auto-derived from request_cpus)"
 if [ -n "${MAX_EVENTS}" ]; then
     echo "Max Events: ${MAX_EVENTS}"
 fi

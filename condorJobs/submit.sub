@@ -20,8 +20,8 @@ on_exit_hold = (ExitBySignal == True) || (ExitCode != 0)
 periodic_release =  (NumJobStarts < 3) && ((CurrentTime - EnteredCurrentStatus) > 600)
 
 # Resource requests
-request_memory = 8000
-request_cpus = 4
+request_memory = 12000
+request_cpus = 8
 +JobFlavour = "testmatch"
 
 # Template submit file - use submit_samples.py to automatically submit jobs
