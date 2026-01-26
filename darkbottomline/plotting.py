@@ -86,7 +86,7 @@ class PlotManager:
         signal_file: Optional[str],
         output_path: str,
         variable: str = "met",
-        region: str = "1b:SR",
+        region: Optional[str] = None,
         xlabel: str = "MET [GeV]",
         title_tag: str = "CMS Preliminary  (13.6 TeV, 2023)",
         bins: Optional[np.ndarray] = None,
