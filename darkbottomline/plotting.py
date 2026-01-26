@@ -119,26 +119,43 @@ class PlotManager:
             logging.error("The 'hist' and 'mplhep' libraries are required. Please install them.")
             return ""
 
-        def load_hist_from_file(path: str, var: str, reg: str) -> Optional[hist.Hist]:
+        def load_hist_from_file(path: str, var: str, reg: Optional[str]) -> Optional[hist.Hist]:
             try:
                 with open(path, 'rb') as f:
                     res = pickle.load(f)
-                res = {k.strip(): v for k, v in res.items()}
-                hist_obj = res.get('region_histograms', {}).get(reg, {}).get(var, None)
+                res = {k.strip(): v for k, v in res.items()} # Clean up keys by stripping whitespace
+
+                hist_obj = None
+                if reg: # If a region is specified, assume region-based analysis output
+                    hist_obj = res.get('region_histograms', {}).get(reg, {}).get(var, None)
+                    if hist_obj is None:
+                        logging.warning(f"Could not find histogram '{var}' for region '{reg}' in 'region_histograms' of {path}")
+                
+                if hist_obj is None: # If not found in region_histograms or no region specified, look in top-level 'histograms'
+                    hist_obj = res.get('histograms', {}).get(var, None)
+                    if hist_obj is None:
+                        logging.warning(f"Could not find histogram '{var}' in 'histograms' (top-level) of {path}")
+
                 if hist_obj and isinstance(hist_obj, hist.Hist):
-                    if var == "met": # Apply cut for MET plots
+                    # Apply cut for MET plots if the variable is 'met' and histogram has a 'met' axis
+                    if var == "met":
                         met_axis_name = None
                         for axis in hist_obj.axes:
                             if axis.name == "met":
                                 met_axis_name = axis.name
                                 break
                         if met_axis_name:
-                            hist_obj = hist_obj[{met_axis_name: slice(hist.loc(150.0), None)}]
+                            # Rebinning is not supported for hist.Hist objects if the binning is changed during slicing
+                            # For simple cut, direct slicing is fine
+                            try:
+                                hist_obj = hist_obj[{met_axis_name: slice(hist.loc(150.0), None)}]
+                            except Exception as e:
+                                logging.warning(f"Failed to apply 150GeV cut on MET axis for variable '{var}': {e}")
                         else:
-                            logging.warning(f"MET axis not found in histogram for variable '{var}'. Cannot apply 200GeV cut.")
+                            logging.warning(f"MET axis not found in histogram for variable '{var}'. Cannot apply 150GeV cut.")
                     return hist_obj
                 else:
-                    logging.warning(f"Could not load histogram '{var}' for region '{reg}' from {path}")
+                    logging.warning(f"Histogram '{var}' (region: {reg}) not found or not a hist.Hist object in {path}.")
                     return None
             except Exception as e:
                 logging.error(f"Error loading histogram from {path}: {e}")

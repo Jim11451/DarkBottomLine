@@ -593,7 +593,7 @@ Examples:
     stacked_parser.add_argument("--signal", help="Signal results pickle path")
     stacked_parser.add_argument("--output", required=True, help="Output plot file (e.g. outputs/plots/stacked_met.pdf)")
     stacked_parser.add_argument("--variable", default="met", help="Variable key to plot (default: met)")
-    stacked_parser.add_argument("--region", default="1b:SR", help="Analysis region to plot (default: 1b:SR)")
+    stacked_parser.add_argument("--region", default=None, help="Analysis region to plot (e.g., '1b:SR'). If not provided, attempts to plot from top-level histograms (for pre-region analysis results).")
     stacked_parser.add_argument("--xlabel", default="MET [GeV]", help="X-axis label")
     stacked_parser.add_argument("--title", default="CMS Preliminary  (13.6 TeV, 2023)", help="Title tag with CMS text")
     stacked_parser.add_argument("--version", help="Version string (default: auto-generate timestamp)")
