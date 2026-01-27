@@ -381,6 +381,93 @@ def make_plots(args):
     logging.info("Plot creation completed!")
 
 
+def make_single_plots(args):
+    """Create plots from a single event-level analysis file."""
+    logging.info("Creating single plots from event-level file...")
+
+    # Load results (which are 'events' and 'objects' in this case)
+    import pickle
+    import numpy as np
+    import awkward as ak
+    with open(args.input, 'rb') as f:
+        loaded_data = pickle.load(f)
+    
+    events_list = loaded_data.get('events')
+    objects_dict_list = loaded_data.get('objects')
+
+    if events_list is None or objects_dict_list is None:
+        logging.error(f"Input file {args.input} does not contain 'events' or 'objects' keys required for single plotting.")
+        sys.exit(1)
+
+    # Convert lists back to awkward arrays as HistogramManager expects them
+    events = ak.Array(events_list)
+    objects = {}
+    for k, v in objects_dict_list.items():
+        if v is not None: # Ensure the list is not None before converting
+            objects[k] = ak.Array(v)
+        else:
+            objects[k] = ak.Array([]) # Or an empty awkward array if None
+
+    # Initialize HistogramManager and define histograms
+    # A minimal config might be needed for HistogramManager if it relies on it.
+    # For now, let's assume it can be initialized without extensive config,
+    # or that default parameters are sufficient.
+    from .histograms import HistogramManager
+    histogram_manager = HistogramManager()
+    
+    # Define histograms
+    defined_histograms = histogram_manager.define_histograms()
+
+    # Create dummy weights for filling histograms
+    # Event-level files from selection might not contain weights
+    dummy_weights = np.ones(len(events))
+
+    # Fill histograms with the loaded events and objects
+    # Note: DarkBottomLineProcessor.process usually handles this with full corrections/weights
+    # Here, we do a minimal filling for plotting purposes.
+    filled_histograms = histogram_manager.fill_histograms(
+        events, objects, dummy_weights
+    )
+    
+    # Construct a results dictionary that the PlotManager expects
+    # For event-level plots, we create a pseudo-results dict with only the 'histograms'
+    pseudo_results = {"histograms": filled_histograms}
+
+    # Load plotting config if provided
+    plot_config = None
+    if args.plot_config:
+        plot_config = load_config(args.plot_config)
+        logging.info(f"Loaded plotting configuration from {args.plot_config}")
+    else:
+        # Try to load default plotting config
+        default_plot_config_path = Path(__file__).parent.parent / "configs" / "plotting.yaml"
+        if default_plot_config_path.exists():
+            plot_config = load_config(str(default_plot_config_path))
+            logging.info(f"Loaded default plotting configuration from {default_plot_config_path}")
+
+    # Initialize plot manager with config
+    plot_manager = PlotManager(config=plot_config)
+
+    # Generate version string if not provided (format: YYYYMMDD_HHMM)
+    if not args.version:
+        from datetime import datetime
+        version = datetime.now().strftime("%Y%m%d_%H%M")
+    else:
+        version = args.version
+
+    # Create output directory
+    import os
+    os.makedirs(args.save_dir, exist_ok=True)
+
+    # Call the new event-level plotting function
+    plot_files = plot_manager.create_event_level_variable_plots(
+        pseudo_results, args.save_dir, args.show_data, version
+    )
+
+    logging.info(f"Single plots saved to {args.save_dir}")
+    logging.info("Single plot creation completed!")
+
+
 def make_stacked_plots(args):
     """Create stacked Data/MC plots with ratio and uncertainty band."""
     logging.info("Creating stacked plots...")
@@ -585,6 +672,15 @@ Examples:
     plots_parser.add_argument("--plot-config", help="Path to plotting configuration YAML file (default: configs/plotting.yaml)")
     # All formats (PNG, PDF, ROOT, TXT) are generated automatically in batch mode
     plots_parser.set_defaults(func=make_plots)
+
+    # Make single plots command (for event-level analysis files)
+    single_plots_parser = subparsers.add_parser("make-single-plots", help="Create plots from a single analysis file (pre-region)")
+    single_plots_parser.add_argument("--input", required=True, help="Input event-level results file (e.g., from 'run' command)")
+    single_plots_parser.add_argument("--save-dir", required=True, help="Output directory")
+    single_plots_parser.add_argument("--show-data", action="store_true", help="Show data points")
+    single_plots_parser.add_argument("--version", help="Version string (default: auto-generate timestamp)")
+    single_plots_parser.add_argument("--plot-config", help="Path to plotting configuration YAML file (default: configs/plotting.yaml)")
+    single_plots_parser.set_defaults(func=make_single_plots)
 
     # Make stacked plots command
     stacked_parser = subparsers.add_parser("make-stacked-plots", help="Create stacked Data/MC plots with ratio")
