@@ -86,7 +86,7 @@ class PlotManager:
         signal_file: Optional[str],
         output_path: str,
         variable: str = "met",
-        region: str = "1b:SR",
+        region: Optional[str] = None,
         xlabel: str = "MET [GeV]",
         title_tag: str = "CMS Preliminary  (13.6 TeV, 2023)",
         bins: Optional[np.ndarray] = None,
@@ -119,26 +119,43 @@ class PlotManager:
             logging.error("The 'hist' and 'mplhep' libraries are required. Please install them.")
             return ""
 
-        def load_hist_from_file(path: str, var: str, reg: str) -> Optional[hist.Hist]:
+        def load_hist_from_file(path: str, var: str, reg: Optional[str]) -> Optional[hist.Hist]:
             try:
                 with open(path, 'rb') as f:
                     res = pickle.load(f)
-                res = {k.strip(): v for k, v in res.items()}
-                hist_obj = res.get('region_histograms', {}).get(reg, {}).get(var, None)
+                res = {k.strip(): v for k, v in res.items()} # Clean up keys by stripping whitespace
+
+                hist_obj = None
+                if reg: # If a region is specified, assume region-based analysis output
+                    hist_obj = res.get('region_histograms', {}).get(reg, {}).get(var, None)
+                    if hist_obj is None:
+                        logging.warning(f"Could not find histogram '{var}' for region '{reg}' in 'region_histograms' of {path}")
+                
+                if hist_obj is None: # If not found in region_histograms or no region specified, look in top-level 'histograms'
+                    hist_obj = res.get('histograms', {}).get(var, None)
+                    if hist_obj is None:
+                        logging.warning(f"Could not find histogram '{var}' in 'histograms' (top-level) of {path}")
+
                 if hist_obj and isinstance(hist_obj, hist.Hist):
-                    if var == "met": # Apply cut for MET plots
+                    # Apply cut for MET plots if the variable is 'met' and histogram has a 'met' axis
+                    if var == "met":
                         met_axis_name = None
                         for axis in hist_obj.axes:
                             if axis.name == "met":
                                 met_axis_name = axis.name
                                 break
                         if met_axis_name:
-                            hist_obj = hist_obj[{met_axis_name: slice(hist.loc(150.0), None)}]
+                            # Rebinning is not supported for hist.Hist objects if the binning is changed during slicing
+                            # For simple cut, direct slicing is fine
+                            try:
+                                hist_obj = hist_obj[{met_axis_name: slice(hist.loc(150.0), None)}]
+                            except Exception as e:
+                                logging.warning(f"Failed to apply 150GeV cut on MET axis for variable '{var}': {e}")
                         else:
-                            logging.warning(f"MET axis not found in histogram for variable '{var}'. Cannot apply 200GeV cut.")
+                            logging.warning(f"MET axis not found in histogram for variable '{var}'. Cannot apply 150GeV cut.")
                     return hist_obj
                 else:
-                    logging.warning(f"Could not load histogram '{var}' for region '{reg}' from {path}")
+                    logging.warning(f"Histogram '{var}' (region: {reg}) not found or not a hist.Hist object in {path}.")
                     return None
             except Exception as e:
                 logging.error(f"Error loading histogram from {path}: {e}")
@@ -263,6 +280,87 @@ class PlotManager:
         plt.close(fig)
         logging.info(f"Created stacked plot at {out_path}")
         return str(out_path)
+
+    def create_event_level_variable_plots(self, results: Dict[str, Any], output_dir: str,
+                                          show_data: bool, version: str) -> Dict[str, str]:
+        """
+        Create individual plots for each variable found in the top-level "histograms"
+        key of the analysis results (event-level analysis output).
+
+        Args:
+            results: Analysis results dictionary (from DarkBottomLineProcessor)
+            output_dir: Base output directory
+            show_data: Whether to show data points
+            version: Version string for multi-format output
+
+        Returns:
+            Dictionary of plot file paths
+        """
+        plot_files = {}
+
+        event_histograms = results.get("histograms", {})
+        if not event_histograms:
+            logging.warning("No top-level 'histograms' found in the results for event-level plotting.")
+            return plot_files
+
+        logging.info("Creating event-level variable plots...")
+
+        # Filter for key variables (MET, electron, muon pt and eta) based on configs
+        # For now, let's assume all histograms in 'histograms' are desired.
+        # A more sophisticated filtering could be added here if needed,
+        # potentially by reading plotting.yaml or another config file.
+
+        for var_name, hist_data in event_histograms.items():
+            try:
+                if hist_data is None:
+                    continue
+
+                # Create figure without ratio panel for single plots
+                fig, ax_main = plt.subplots(1, 1, figsize=(10, 8))
+
+                # Plot histogram on main axis
+                # For event-level plots, we don't have a clear "region" concept,
+                # so the ratio plot context is less direct. We'll plot a single histogram.
+                self._plot_single_histogram(ax_main, hist_data, var_name, show_data)
+
+                # Determine if this variable should use log scale
+                use_log_scale = var_name not in self.no_log_scale_vars
+
+                # Plot filename: just the variable name for event-level
+                plot_filename = var_name
+
+                # Save with log scale (default for most plots)
+                if use_log_scale:
+                    ax_main.set_yscale('log')
+                    ax_main.set_ylim(bottom=0.1)
+                    saved_files = self.save_plot_multi_format(
+                        fig, plot_filename, "event_level", version, output_dir,
+                        is_log=True, data_hists=None, mc_hists=None, signal_hists=None
+                    )
+                    # Also save linear version
+                    ax_main.set_yscale('linear')
+                    ax_main.set_ylim(bottom=0)
+                    saved_files_linear = self.save_plot_multi_format(
+                        fig, plot_filename, "event_level", version, output_dir,
+                        is_log=False, data_hists=None, mc_hists=None, signal_hists=None
+                    )
+                else:
+                    # Save linear version only (no log scale)
+                    saved_files = self.save_plot_multi_format(
+                        fig, plot_filename, "event_level", version, output_dir,
+                        is_log=False, data_hists=None, mc_hists=None, signal_hists=None
+                    )
+                    saved_files_linear = {} # Placeholder for unused variable
+
+                plt.close(fig)
+
+                plot_files[var_name] = saved_files.get('png', '')
+
+            except Exception as e:
+                logging.warning(f"Failed to create event-level plot for {var_name}: {e}")
+
+        logging.info(f"Created {len(plot_files)} event-level plots.")
+        return plot_files
 
     def _parse_region_name(self, region: str) -> Dict[str, str]:
         """
@@ -802,6 +900,10 @@ class PlotManager:
             'n_bjets': 'Number of B-jets',
             'n_muons': 'Number of Muons',
             'n_electrons': 'Number of Electrons',
+            'electron_pt': 'Electron pT [GeV]',
+            'electron_eta': 'Electron η',
+            'muon_pt': 'Muon pT [GeV]',
+            'muon_eta': 'Muon η',
         }
         return labels.get(var_name, var_name.replace('_', ' ').title())
 
