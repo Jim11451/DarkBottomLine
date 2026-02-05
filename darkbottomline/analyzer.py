@@ -10,11 +10,16 @@ from typing import Dict, Any, Optional, Union
 from pathlib import Path
 import json
 
-from .processor import DarkBottomLineProcessor
+from .processor import (
+    DarkBottomLineProcessor,
+    _build_event_weights_for_save,
+    _event_weights_flat_columns,
+)
 from .objects import build_objects
 from .regions import RegionManager
 from .histograms import HistogramManager
 from .selections import apply_selection
+from .weights import WeightCalculator
 
 # Try to import Coffea for processor wrapper
 try:
@@ -55,7 +60,8 @@ class DarkBottomLineAnalyzer:
             "region_histograms": self.region_histograms,
             "region_cutflow": {},
             "region_validation": {},
-            "metadata": {}
+            "metadata": {},
+            "event_weights": {},
         }
 
         logging.info(f"Initialized analyzer with {len(self.region_manager.regions)} regions")
@@ -128,46 +134,75 @@ class DarkBottomLineAnalyzer:
         """
         Process events through all regions.
 
+        Cuts are applied in series: (1) preselection (event selection), then
+        (2) region cuts. Regions therefore only see events that passed preselection.
+
         Args:
             events: Awkward Array of events
+            event_selection_output: If set, save preselected events to this path
 
         Returns:
             Analysis results with per-region histograms
         """
         start_time = time.time()
 
-        # Build physics objects directly for regioning
-        logging.info("Building physics objects for regions...")
+        # Build physics objects
+        logging.info("Building physics objects...")
         objects = build_objects(events, self.base_processor.config)
 
-        # Optionally perform and save event-level selection before regioning
+        # Step 1 (series): Apply preselection first — regions get events after preselection
+        logging.info("Applying preselection (event selection)...")
+        try:
+            selected_events, selected_objects, cutflow = apply_selection(
+                events, objects, self.base_processor.config
+            )
+            events = selected_events
+            objects = selected_objects
+            logging.info(f"Events after preselection: {len(events)}")
+        except Exception as e:
+            logging.error(f"Preselection failed: {e}", exc_info=True)
+            raise
+
+        # Optionally save preselected events to file
         if event_selection_output:
             try:
-                logging.info("Applying event-level selection before region analysis...")
-                selected_events, selected_objects, cutflow = apply_selection(
-                    events, objects, self.base_processor.config
-                )
-                # Save using base processor helper
-                try:
-                    logging.info(f"Saving pre-region event selection to {event_selection_output} ({len(selected_events)} events)")
-                    self.base_processor._save_event_selection(event_selection_output, selected_events, selected_objects)
-                    # Verify file was created
-                    import os
-                    if os.path.exists(event_selection_output):
-                        file_size = os.path.getsize(event_selection_output)
-                        logging.info(f"✓ Pre-region event selection saved successfully to {event_selection_output} ({file_size} bytes)")
-                    else:
-                        logging.error(f"✗ File {event_selection_output} was not created!")
-                except Exception as e:
-                    logging.error(f"Failed to save pre-region event selection to {event_selection_output}: {e}", exc_info=True)
-
-                # Continue analysis using the selected events/objects
-                events = selected_events
-                objects = selected_objects
+                logging.info(f"Saving preselected events to {event_selection_output} ({len(events)} events)")
+                self.base_processor._save_event_selection(event_selection_output, events, objects)
+                import os
+                if os.path.exists(event_selection_output):
+                    file_size = os.path.getsize(event_selection_output)
+                    logging.info(f"✓ Preselection saved to {event_selection_output} ({file_size} bytes)")
+                else:
+                    logging.error(f"✗ File {event_selection_output} was not created!")
             except Exception as e:
-                logging.warning(f"Error during pre-region event selection: {e}")
+                logging.error(f"Failed to save preselection to {event_selection_output}: {e}", exc_info=True)
 
-        # Apply region cuts
+        # Step 2: Compute corrections and nominal total weight (for histograms + saving)
+        logging.info("Computing corrections and event weights...")
+        event_weights_nominal = None
+        event_weights_save = {}
+        try:
+            corrections = self.base_processor.correction_manager.get_all_corrections(
+                events, objects
+            )
+            weight_calculator = WeightCalculator(len(events))
+            weight_calculator.add_generator_weight(events)
+            weight_calculator.add_corrections(corrections)
+            event_weights_nominal = weight_calculator.get_weight("central")
+            event_weights_save = _build_event_weights_for_save(
+                events, corrections, weight_calculator
+            )
+        except Exception as e:
+            logging.warning(f"Weight calculation failed, using unit weights: {e}", exc_info=True)
+            n_ev = len(events)
+            event_weights_nominal = np.ones(n_ev, dtype=np.float64)
+            event_weights_save = {
+                "generator": np.ones(n_ev, dtype=np.float64),
+                "pileup": np.ones(n_ev, dtype=np.float64),
+                "weight_total_nominal": np.ones(n_ev, dtype=np.float64),
+            }
+
+        # Step 3 (series): Apply region cuts to preselected events only
         logging.info("Applying region cuts...")
         region_masks = self.region_manager.apply_regions(events, objects)
 
@@ -197,13 +232,14 @@ class DarkBottomLineAnalyzer:
         # Calculate processing statistics
         processing_time = time.time() - start_time
 
-        # Update accumulator
+        # Update accumulator (histograms filled with nominal total weight; all systematics saved)
         self.accumulator["regions"] = region_results
         self.accumulator["region_histograms"] = self._fill_region_histograms(
-            events, objects, region_masks
+            events, objects, region_masks, event_weights_nominal
         )
         self.accumulator["region_cutflow"] = self._calculate_region_cutflow(region_masks)
         self.accumulator["region_validation"] = validation_results
+        self.accumulator["event_weights"] = event_weights_save
         self.accumulator["metadata"] = {
             "n_events_processed": len(events),
             "n_regions": len(self.region_manager.regions),
@@ -314,56 +350,47 @@ class DarkBottomLineAnalyzer:
         # MET
         variables["met"] = events["PFMET_pt"] if "PFMET_pt" in events.fields else events["MET_pt"]
 
-        # Jet multiplicity
+        # Jet multiplicity; use tight pt>30 leptons for region-consistent variables
         jets = objects.get("jets", ak.Array([]))
         bjets = objects.get("bjets", ak.Array([]))
-        muons = objects.get("muons", ak.Array([]))
-        electrons = objects.get("electrons", ak.Array([]))
-        taus = objects.get("taus", ak.Array([]))
+        muons = objects.get("tight_muons_pt30", ak.Array([]))
+        electrons = objects.get("tight_electrons_pt30", ak.Array([]))
+        taus = objects.get("tight_taus_pt30", ak.Array([]))
 
         # Check if objects are empty
-        if len(ak.flatten(jets)) == 0:
-            variables["n_jets"] = ak.zeros_like(events["event"], dtype=int)
-        else:
-            variables["n_jets"] = ak.num(jets, axis=1)
+        # Safe per-event count: use axis=1 for jagged arrays; depth-1 (sliced region) can raise
+        def _safe_num_jagged(arr, n_ev: int):
+            if arr is None or (isinstance(arr, ak.Array) and len(arr) == 0):
+                return np.zeros(n_ev, dtype=np.int64)
+            try:
+                return np.asarray(ak.num(arr, axis=1))
+            except (Exception, BaseException):
+                return np.zeros(n_ev, dtype=np.int64)
 
-        if len(ak.flatten(bjets)) == 0:
-            variables["n_bjets"] = ak.zeros_like(events["event"], dtype=int)
-        else:
-            variables["n_bjets"] = ak.num(bjets, axis=1)
+        n_ev = len(events) # Total events in this region
 
-        if len(ak.flatten(muons)) == 0:
-            variables["n_muons"] = ak.zeros_like(events["event"], dtype=int)
-        else:
-            variables["n_muons"] = ak.num(muons, axis=1)
+        variables["n_jets"] = _safe_num_jagged(objects.get("jets"), n_ev)
+        variables["n_bjets"] = _safe_num_jagged(objects.get("bjets"), n_ev)
+        variables["n_muons"] = _safe_num_jagged(objects.get("tight_muons_pt30"), n_ev)
+        variables["n_electrons"] = _safe_num_jagged(objects.get("tight_electrons_pt30"), n_ev)
+        variables["n_taus"] = _safe_num_jagged(objects.get("tight_taus_pt30"), n_ev)
 
-        if len(ak.flatten(electrons)) == 0:
-            variables["n_electrons"] = ak.zeros_like(events["event"], dtype=int)
-        else:
-            variables["n_electrons"] = ak.num(electrons, axis=1)
-
-        if len(ak.flatten(taus)) == 0:
-            variables["n_taus"] = ak.zeros_like(events["event"], dtype=int)
-        else:
-            variables["n_taus"] = ak.num(taus, axis=1)
-
-        # DeltaPhi between MET and jets
+        # DeltaPhi between MET and jets (use safe count; avoid axis=1 on depth-1 arrays)
         jets = objects.get("jets", ak.Array([]))
         met_phi = events["PFMET_phi"] if "PFMET_phi" in events.fields else events["MET_phi"]
+        n_jets_per_event = _safe_num_jagged(jets, n_ev)
+        has_jets = np.any(n_jets_per_event > 0)
 
-        # Check if any events have jets
-        n_jets_per_event = ak.num(jets, axis=1)
-        has_jets = n_jets_per_event > 0
-
-        if ak.any(has_jets):
-            jet_phi = jets.phi
-            # Calculate delta phi for each event, handling empty jet arrays
-            delta_phi = ak.min(abs(jet_phi - met_phi), axis=1)
-            # Fill NaN values with 0 for events with no jets
-            delta_phi = ak.fill_none(delta_phi, 0.0)
-            variables["delta_phi"] = delta_phi
+        if has_jets:
+            try:
+                jet_phi = jets.phi
+                delta_phi = ak.min(ak.abs(jet_phi - met_phi), axis=1)
+                delta_phi = ak.fill_none(delta_phi, 0.0)
+                variables["delta_phi"] = delta_phi
+            except (Exception, BaseException):
+                variables["delta_phi"] = np.zeros(n_ev, dtype=np.float64)
         else:
-            variables["delta_phi"] = ak.zeros_like(events["event"], dtype=float)
+            variables["delta_phi"] = np.zeros(n_ev, dtype=np.float64)
 
         return variables
 
@@ -390,20 +417,31 @@ class DarkBottomLineAnalyzer:
         self,
         events: ak.Array,
         objects: Dict[str, Any],
-        region_masks: Dict[str, ak.Array]
+        region_masks: Dict[str, ak.Array],
+        event_weights_nominal: Optional[Union[ak.Array, np.ndarray]] = None,
     ) -> Dict[str, Dict[str, Any]]:
         """
-        Fill histograms for all regions.
+        Fill histograms for all regions with nominal total weight.
 
         Args:
             events: Awkward Array of events
             objects: Dictionary containing selected objects
             region_masks: Dictionary of region masks
+            event_weights_nominal: Per-event nominal total weight (optional); if None, use ones.
 
         Returns:
             Dictionary of filled region histograms
         """
         filled_histograms = {}
+        n_ev = len(events)
+        # Convert to numpy once for slicing per region
+        if event_weights_nominal is not None:
+            try:
+                w_full = np.asarray(ak.to_numpy(event_weights_nominal))
+            except Exception:
+                w_full = np.ones(n_ev, dtype=np.float64)
+        else:
+            w_full = np.ones(n_ev, dtype=np.float64)
 
         for region_name, region_mask in region_masks.items():
             # Check if region mask is valid and has any passing events
@@ -441,10 +479,16 @@ class DarkBottomLineAnalyzer:
                     else:
                         region_objects[obj_name] = obj_data
 
-                # Fill histograms for this region
+                # Fill histograms with nominal total weight (sliced for this region)
                 if len(region_events) > 0:
+                    n_r = len(region_events)
+                    try:
+                        mask_np = np.asarray(ak.to_numpy(region_mask))
+                        w = w_full[mask_np].astype(np.float64)
+                    except (Exception, BaseException):
+                        w = np.ones(n_r, dtype=np.float64)
                     filled_histograms[region_name] = self.histogram_manager.fill_histograms(
-                        region_events, region_objects, ak.ones_like(region_events.event, dtype=float)
+                        region_events, region_objects, w
                     )
                 else:
                     filled_histograms[region_name] = self.histogram_manager.define_histograms()
@@ -557,7 +601,7 @@ class DarkBottomLineAnalyzer:
             self._save_pickle(output_file)
 
     def _save_parquet(self, output_file: str):
-        """Save results as Parquet file."""
+        """Save results as Parquet file (region variables + per-event weights)."""
         import pandas as pd
 
         # Convert region results to DataFrame format
@@ -570,12 +614,19 @@ class DarkBottomLineAnalyzer:
                 else:
                     data[col_name] = var_data
 
+        # Per-event weights (central/up/down per systematic)
+        event_weights = self.accumulator.get("event_weights", {})
+        if event_weights:
+            flat = _event_weights_flat_columns(event_weights)
+            for k, v in flat.items():
+                data[k] = v
+
         df = pd.DataFrame(data)
         df.to_parquet(output_file)
         logging.info(f"Saved region results to {output_file}")
 
     def _save_root(self, output_file: str):
-        """Save results as ROOT file."""
+        """Save results as ROOT file (histograms + per-event weight tree)."""
         try:
             import uproot
             with uproot.recreate(output_file) as f:
@@ -587,6 +638,13 @@ class DarkBottomLineAnalyzer:
                 # Save metadata as a JSON string
                 metadata_str = json.dumps(self.accumulator.get("metadata", {}))
                 f["metadata"] = metadata_str
+
+                # Per-event weights as TTree
+                event_weights = self.accumulator.get("event_weights", {})
+                if event_weights:
+                    flat = _event_weights_flat_columns(event_weights)
+                    if flat:
+                        f["event_weights"] = flat
 
             logging.info(f"Saved region results to {output_file}")
         except ImportError:
@@ -620,6 +678,7 @@ if COFFEA_AVAILABLE:
                 "region_cutflow": processor.dict_accumulator({}),
                 "region_validation": processor.dict_accumulator({}),
                 "metadata": processor.dict_accumulator({}),
+                "event_weights": processor.dict_accumulator({}),
             })
             # Store selected events/objects for event_selection_output
             # Use file-based approach for cross-worker compatibility
@@ -740,7 +799,38 @@ if COFFEA_AVAILABLE:
                                         self.accumulator["region_validation"][key].update(value)
             if "metadata" in result:
                 self.accumulator["metadata"].update(result.get("metadata", {}))
+            # Merge event_weights (concatenate arrays across chunks)
+            if "event_weights" in result and result["event_weights"]:
+                self._merge_event_weights_into_accumulator(result["event_weights"])
             return self.accumulator
+
+        def _merge_event_weights_into_accumulator(self, new_weights: Dict[str, Any]):
+            """Merge new per-event weights into accumulator (concatenate arrays)."""
+            acc = self.accumulator["event_weights"]
+            if isinstance(acc, dict) and not acc:
+                # First chunk: store as plain dict (numpy arrays)
+                merged = {}
+                for k, v in new_weights.items():
+                    if isinstance(v, dict):
+                        merged[k] = {kk: np.asarray(vv) for kk, vv in v.items() if isinstance(vv, np.ndarray)}
+                    elif isinstance(v, np.ndarray):
+                        merged[k] = v
+                    else:
+                        merged[k] = np.asarray(v)
+                self.accumulator["event_weights"] = merged
+                return
+            # Subsequent chunks: concatenate
+            merged = self.accumulator["event_weights"] if isinstance(self.accumulator["event_weights"], dict) else {}
+            for k, v in new_weights.items():
+                if isinstance(v, dict):
+                    if k not in merged:
+                        merged[k] = {}
+                    for kk, vv in v.items():
+                        if isinstance(vv, np.ndarray):
+                            merged[k][kk] = np.concatenate([merged[k][kk], vv]) if kk in merged[k] else vv
+                elif isinstance(v, np.ndarray):
+                    merged[k] = np.concatenate([merged[k], v]) if k in merged else v
+            self.accumulator["event_weights"] = merged
 
         def postprocess(self, accumulator: Dict[str, Any]) -> Dict[str, Any]:
             """Post-process results."""
