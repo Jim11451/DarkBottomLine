@@ -7,81 +7,102 @@ import numpy as np
 from typing import Dict, Any, Tuple
 
 
-def select_muons(events: ak.Array, config: Dict[str, Any]) -> ak.Array:
+def select_muons(events: ak.Array, config: Dict[str, Any], wp: str = "loose") -> ak.Array:
     """
     Select muons based on configuration cuts.
 
     Args:
         events: Awkward Array of events
         config: Configuration dictionary with muon selection cuts
+        wp: Working point - "loose" (for event selection) or "tight" (for region selection)
 
     Returns:
         Boolean mask for selected muons
     """
-    # Build muon collection from flat branches
-    muons = ak.zip({
+    # Build muon collection from flat branches (need looseId for loose WP)
+    muon_fields = {
         "pt": events["Muon_pt"],
         "eta": events["Muon_eta"],
         "phi": events["Muon_phi"],
         "tightId": events["Muon_tightId"],
         "pfIsoId": events["Muon_pfIsoId"],
-    })
+    }
+    if "Muon_looseId" in events.fields:
+        muon_fields["looseId"] = events["Muon_looseId"]
+    muons = ak.zip(muon_fields)
 
-    # Basic kinematic cuts
-    pt_mask = muons.pt > config["pt_min"]
+    # Basic kinematic cuts: preselection uses pt_min_loose (default 10), region uses pt_min
+    pt_min = config.get("pt_min_loose", 10.0) if wp == "loose" else config["pt_min"]
+    pt_mask = muons.pt > pt_min
     eta_mask = abs(muons.eta) < config["eta_max"]
 
-    # ID and isolation cuts (simplified - would need actual CMS ID implementation)
-    id_mask = muons.tightId == 1  # tightId branch exists
-    iso_mask = muons.pfIsoId >= 3  # pfIsoId branch exists (3 = tight)
+    # ID and isolation by working point
+    if wp == "loose":
+        id_mask = muons.looseId == 1 if "looseId" in muons.fields else (muons.tightId == 1)
+        iso_mask = muons.pfIsoId >= 1  # loose isolation
+    else:
+        id_mask = muons.tightId == 1
+        iso_mask = muons.pfIsoId >= 3  # tight isolation
 
-    # Combine all cuts
     selection_mask = pt_mask & eta_mask & id_mask & iso_mask
-
     return selection_mask
 
 
-def select_electrons(events: ak.Array, config: Dict[str, Any]) -> ak.Array:
+def select_electrons(events: ak.Array, config: Dict[str, Any], wp: str = "loose") -> ak.Array:
     """
     Select electrons based on configuration cuts.
 
     Args:
         events: Awkward Array of events
         config: Configuration dictionary with electron selection cuts
+        wp: Working point - "loose" (for event selection) or "tight" (for region selection)
 
     Returns:
         Boolean mask for selected electrons
     """
-    # Build electron collection from flat branches
-    electrons = ak.zip({
+    # Build electron collection from flat branches (need mvaIso_WP90 for loose)
+    ele_fields = {
         "pt": events["Electron_pt"],
         "eta": events["Electron_eta"],
         "phi": events["Electron_phi"],
         "cutBased": events["Electron_cutBased"],
         "mvaIso_WP80": events["Electron_mvaIso_WP80"],
-    })
+    }
+    if "Electron_mvaIso_WP90" in events.fields:
+        ele_fields["mvaIso_WP90"] = events["Electron_mvaIso_WP90"]
+    electrons = ak.zip(ele_fields)
 
-    # Basic kinematic cuts
-    pt_mask = electrons.pt > config["pt_min"]
+    # Basic kinematic cuts: preselection uses pt_min_loose (default 10), region uses pt_min
+    pt_min = config.get("pt_min_loose", 10.0) if wp == "loose" else config["pt_min"]
+    pt_mask = electrons.pt > pt_min
     eta_mask = abs(electrons.eta) < config["eta_max"]
 
-    # ID and isolation cuts (simplified - would need actual CMS ID implementation)
-    id_mask = electrons.cutBased >= 4  # cutBased branch exists (4 = tight)
-    iso_mask = electrons.mvaIso_WP80 == 1  # mvaIso_WP80 branch exists (1 = pass)
+    # ECAL barrel-endcap gap veto: exclude 1.4442 < |eta| < 1.566
+    eta_gap_min = 1.4442
+    eta_gap_max = 1.566
+    in_gap = (abs(electrons.eta) > eta_gap_min) & (abs(electrons.eta) < eta_gap_max)
+    gap_veto_mask = ~in_gap
 
-    # Combine all cuts
-    selection_mask = pt_mask & eta_mask & id_mask & iso_mask
+    # ID and isolation by working point (cutBased: 2=loose, 4=tight)
+    if wp == "loose":
+        id_mask = electrons.cutBased >= 2
+        iso_mask = electrons.mvaIso_WP90 == 1 if "mvaIso_WP90" in electrons.fields else (electrons.mvaIso_WP80 == 1)
+    else:
+        id_mask = electrons.cutBased >= 4
+        iso_mask = electrons.mvaIso_WP80 == 1
 
+    selection_mask = pt_mask & eta_mask & gap_veto_mask & id_mask & iso_mask
     return selection_mask
 
 
-def select_taus(events: ak.Array, config: Dict[str, Any]) -> ak.Array:
+def select_taus(events: ak.Array, config: Dict[str, Any], wp: str = "loose") -> ak.Array:
     """
     Select taus based on configuration cuts.
 
     Args:
         events: Awkward Array of events
         config: Configuration dictionary with tau selection cuts
+        wp: Working point - "loose" (for event selection) or "tight" (for region selection)
 
     Returns:
         Boolean mask for selected taus
@@ -95,20 +116,19 @@ def select_taus(events: ak.Array, config: Dict[str, Any]) -> ak.Array:
         "decayMode": events["Tau_decayMode"],
     })
 
-    # Basic kinematic cuts
-    pt_mask = taus.pt > config["pt_min"]
+    # Basic kinematic cuts: preselection uses pt_min_loose (default 10), region uses pt_min
+    pt_min = config.get("pt_min_loose", 10.0) if wp == "loose" else config["pt_min"]
+    pt_mask = taus.pt > pt_min
     eta_mask = abs(taus.eta) < config["eta_max"]
 
-    # ID and decay mode cuts (simplified - would need actual CMS ID implementation)
-    id_mask = taus.idDeepTau2018v2p5VSjet >= 16  # idDeepTau2018v2p5VSjet branch exists (16 = tight)
+    # ID by working point (DeepTau: 4=medium/loose, 16=tight)
+    id_mask = (taus.idDeepTau2018v2p5VSjet >= 4) if wp == "loose" else (taus.idDeepTau2018v2p5VSjet >= 16)
     # Check if decay mode is in allowed modes
     decay_mode_mask = ak.zeros_like(taus.pt, dtype=bool)
     for mode in config["decay_modes"]:
         decay_mode_mask = decay_mode_mask | (taus.decayMode == mode)
 
-    # Combine all cuts
     selection_mask = pt_mask & eta_mask & id_mask & decay_mode_mask
-
     return selection_mask
 
 
@@ -245,6 +265,93 @@ def get_bjet_mask(jets: ak.Array, config: Dict[str, Any]) -> ak.Array:
     return jets.btagDeepFlavB > 0.2783
 
 
+def _dilepton_mass(l1: ak.Array, l2: ak.Array, m_default: float = 0.105) -> ak.Array:
+    """Compute dilepton invariant mass from two leptons (pt, eta, phi; mass optional)."""
+    pt1, eta1, phi1 = l1.pt, l1.eta, l1.phi
+    pt2, eta2, phi2 = l2.pt, l2.eta, l2.phi
+    m1 = ak.values_astype(getattr(l1, "mass", ak.full_like(pt1, m_default)), float)
+    m2 = ak.values_astype(getattr(l2, "mass", ak.full_like(pt2, m_default)), float)
+    px1 = pt1 * np.cos(phi1)
+    py1 = pt1 * np.sin(phi1)
+    pz1 = pt1 * np.sinh(eta1)
+    e1 = np.sqrt(m1**2 + pt1**2 * np.cosh(eta1)**2)
+    px2 = pt2 * np.cos(phi2)
+    py2 = pt2 * np.sin(phi2)
+    pz2 = pt2 * np.sinh(eta2)
+    e2 = np.sqrt(m2**2 + pt2**2 * np.cosh(eta2)**2)
+    mll_sq = (e1 + e2)**2 - (px1 + px2)**2 - (py1 + py2)**2 - (pz1 + pz2)**2
+    return np.sqrt(ak.where(mll_sq >= 0, mll_sq, 0.0))
+
+
+def build_z_candidates(
+    loose_muons: ak.Array,
+    loose_electrons: ak.Array,
+    pt_lead_min: float = 30.0,
+    pt_sublead_min: float = 10.0,
+) -> Tuple[ak.Array, ak.Array, ak.Array, ak.Array, ak.Array, ak.Array, ak.Array, ak.Array]:
+    """
+    Build Z->ll candidates for Z CR: 2 opposite-sign leptons.
+    Leading: tight ID, pt > pt_lead_min (30 GeV).
+    Subleading: loose ID, pt > pt_sublead_min (10 GeV).
+
+    Returns:
+        n_z_muons, n_z_electrons: 2 if valid Z candidate else 0 per event
+        mll_mu, mll_el: invariant mass of pair (0 if no candidate)
+        z_lep_sum_x_mu, z_lep_sum_y_mu, z_lep_sum_x_el, z_lep_sum_y_el: pT vector sum for RecoilZ
+    """
+    n_ev = len(loose_muons)
+    # awkward has no ak.zeros; use numpy and wrap for compatibility
+    n_z_muons = ak.Array(np.zeros(n_ev, dtype=np.int64))
+    n_z_electrons = ak.Array(np.zeros(n_ev, dtype=np.int64))
+    mll_mu = ak.Array(np.zeros(n_ev, dtype=float))
+    mll_el = ak.Array(np.zeros(n_ev, dtype=float))
+    z_lep_sum_x_mu = ak.Array(np.zeros(n_ev, dtype=float))
+    z_lep_sum_y_mu = ak.Array(np.zeros(n_ev, dtype=float))
+    z_lep_sum_x_el = ak.Array(np.zeros(n_ev, dtype=float))
+    z_lep_sum_y_el = ak.Array(np.zeros(n_ev, dtype=float))
+
+    has_charge_mu = "charge" in loose_muons.fields
+    has_charge_el = "charge" in loose_electrons.fields
+
+    def _one_flavor(
+        loose_lep: ak.Array, is_mu: bool
+    ) -> Tuple[ak.Array, ak.Array, ak.Array, ak.Array, ak.Array]:
+        n_lep = ak.num(loose_lep, axis=1)
+        has_two = n_lep >= 2
+        idx = ak.argsort(loose_lep.pt, axis=1, ascending=False)
+        ordered = loose_lep[idx]
+        lead = ak.firsts(ordered)
+        sublead = ak.pad_none(ordered, 2, axis=1)[:, 1]
+        sublead_filled = ak.fill_none(sublead, lead)  # fallback for single-lep events
+        if (has_charge_mu and is_mu) or (has_charge_el and not is_mu):
+            os_pair = (lead.charge + ak.fill_none(sublead.charge, 999)) == 0
+        else:
+            os_pair = ak.ones_like(has_two, dtype=bool)
+        lead_tight_pt = lead.is_tight & (lead.pt > pt_lead_min)
+        sublead_pt_ok = ak.fill_none(sublead.pt, 0.0) > pt_sublead_min
+        valid = has_two & os_pair & lead_tight_pt & sublead_pt_ok
+        n_z = ak.where(valid, 2, 0)
+        m_default = 0.105 if is_mu else 0.000511
+        mll = ak.where(valid, _dilepton_mass(lead, sublead_filled, m_default), 0.0)
+        sum_x = np.cos(lead.phi) * lead.pt + np.cos(ak.fill_none(sublead.phi, 0.0)) * ak.fill_none(sublead.pt, 0.0)
+        sum_y = np.sin(lead.phi) * lead.pt + np.sin(ak.fill_none(sublead.phi, 0.0)) * ak.fill_none(sublead.pt, 0.0)
+        return n_z, mll, sum_x, sum_y, valid
+
+    if len(ak.flatten(loose_muons)) > 0 and hasattr(loose_muons, "is_tight"):
+        n_z_muons, mll_mu, sx_mu, sy_mu, vm = _one_flavor(loose_muons, True)
+        z_lep_sum_x_mu = ak.where(vm, sx_mu, 0.0)
+        z_lep_sum_y_mu = ak.where(vm, sy_mu, 0.0)
+    if len(ak.flatten(loose_electrons)) > 0 and hasattr(loose_electrons, "is_tight"):
+        n_z_electrons, mll_el, sx_el, sy_el, ve = _one_flavor(loose_electrons, False)
+        z_lep_sum_x_el = ak.where(ve, sx_el, 0.0)
+        z_lep_sum_y_el = ak.where(ve, sy_el, 0.0)
+
+    return (
+        n_z_muons, n_z_electrons, mll_mu, mll_el,
+        z_lep_sum_x_mu, z_lep_sum_y_mu, z_lep_sum_x_el, z_lep_sum_y_el,
+    )
+
+
 def build_objects(events: ak.Array, config: Dict[str, Any]) -> Dict[str, Any]:
     """
     Build all physics objects with selection and cleaning applied.
@@ -258,18 +365,24 @@ def build_objects(events: ak.Array, config: Dict[str, Any]) -> Dict[str, Any]:
     """
     print("  Building object collections from flat branches...")
 
-    # Select objects
-    print("  Selecting muons...")
-    muon_mask = select_muons(events, config["objects"]["muons"])
-    print(f"    Muons selected: {ak.sum(muon_mask)}")
+    # Select objects: loose for event selection, tight for region selection
+    print("  Selecting muons (loose for event sel, tight for regions)...")
+    muon_mask_loose = select_muons(events, config["objects"]["muons"], wp="loose")
+    muon_mask_tight = select_muons(events, config["objects"]["muons"], wp="tight")
+    muon_mask = muon_mask_loose  # main collection = loose (event selection)
+    print(f"    Muons (loose): {ak.sum(muon_mask_loose)}, tight: {ak.sum(muon_mask_loose & muon_mask_tight)}")
 
-    print("  Selecting electrons...")
-    electron_mask = select_electrons(events, config["objects"]["electrons"])
-    print(f"    Electrons selected: {ak.sum(electron_mask)}")
+    print("  Selecting electrons (loose for event sel, tight for regions)...")
+    electron_mask_loose = select_electrons(events, config["objects"]["electrons"], wp="loose")
+    electron_mask_tight = select_electrons(events, config["objects"]["electrons"], wp="tight")
+    electron_mask = electron_mask_loose
+    print(f"    Electrons (loose): {ak.sum(electron_mask_loose)}, tight: {ak.sum(electron_mask_loose & electron_mask_tight)}")
 
-    print("  Selecting taus...")
-    tau_mask = select_taus(events, config["objects"]["taus"])
-    print(f"    Taus selected: {ak.sum(tau_mask)}")
+    print("  Selecting taus (loose for event sel, tight for regions)...")
+    tau_mask_loose = select_taus(events, config["objects"]["taus"], wp="loose")
+    tau_mask_tight = select_taus(events, config["objects"]["taus"], wp="tight")
+    tau_mask = tau_mask_loose
+    print(f"    Taus (loose): {ak.sum(tau_mask_loose)}, tight: {ak.sum(tau_mask_loose & tau_mask_tight)}")
 
     print("  Selecting jets...")
     jet_mask = select_jets(events, config["objects"]["jets"])
@@ -279,22 +392,32 @@ def build_objects(events: ak.Array, config: Dict[str, Any]) -> Dict[str, Any]:
     fatjet_mask = select_fatjets(events, config["objects"]["fatjets"])
     print(f"    Fat jets selected: {ak.sum(fatjet_mask)}")
 
-    # Build collections from flat branches
-    muons = ak.zip({
+    # Build collections from flat branches (kinematics + ID + charge for Z CR)
+    muon_fields = {
         "pt": events["Muon_pt"],
         "eta": events["Muon_eta"],
         "phi": events["Muon_phi"],
         "tightId": events["Muon_tightId"],
         "pfIsoId": events["Muon_pfIsoId"],
-    })
+    }
+    if "Muon_charge" in events.fields:
+        muon_fields["charge"] = events["Muon_charge"]
+    if "Muon_mass" in events.fields:
+        muon_fields["mass"] = events["Muon_mass"]
+    muons = ak.zip(muon_fields)
 
-    electrons = ak.zip({
+    electron_fields = {
         "pt": events["Electron_pt"],
         "eta": events["Electron_eta"],
         "phi": events["Electron_phi"],
         "cutBased": events["Electron_cutBased"],
         "mvaIso_WP80": events["Electron_mvaIso_WP80"],
-    })
+    }
+    if "Electron_charge" in events.fields:
+        electron_fields["charge"] = events["Electron_charge"]
+    if "Electron_mass" in events.fields:
+        electron_fields["mass"] = events["Electron_mass"]
+    electrons = ak.zip(electron_fields)
 
     taus = ak.zip({
         "pt": events["Tau_pt"],
@@ -318,10 +441,28 @@ def build_objects(events: ak.Array, config: Dict[str, Any]) -> Dict[str, Any]:
         "mass": events["FatJet_mass"],
     })
 
-    # Apply masks to get selected objects
+    # Apply masks: main collections = loose (for event selection, jet cleaning)
     selected_muons = muons[muon_mask]
     selected_electrons = electrons[electron_mask]
     selected_taus = taus[tau_mask]
+    # Per-loose-lepton is_tight flag (for Z CR: leading tight, subleading loose)
+    selected_muons = ak.with_field(selected_muons, muon_mask_tight[muon_mask_loose], "is_tight")
+    selected_electrons = ak.with_field(selected_electrons, electron_mask_tight[electron_mask_loose], "is_tight")
+    # Tight subsets (for region selection)
+    tight_muons = muons[muon_mask_loose & muon_mask_tight]
+    tight_electrons = electrons[electron_mask_loose & electron_mask_tight]
+    tight_taus = taus[tau_mask_loose & tau_mask_tight]
+    # Tight pt>30: for all CRs (W, Top, etc.) leading lepton is tight with pt>30
+    tight_muons_pt30 = tight_muons[tight_muons.pt > 30.0]
+    tight_electrons_pt30 = tight_electrons[tight_electrons.pt > 30.0]
+    tight_taus_pt30 = tight_taus[tight_taus.pt > 30.0]
+
+    # Z CR candidates: 2 OS leptons, leading tight pt>30, subleading loose pt>10
+    (n_z_muons, n_z_electrons, mll_mu, mll_el,
+     z_lep_sum_x_mu, z_lep_sum_y_mu, z_lep_sum_x_el, z_lep_sum_y_el) = build_z_candidates(
+        selected_muons, selected_electrons, pt_lead_min=30.0, pt_sublead_min=10.0
+    )
+
     selected_jets = jets[jet_mask]
     selected_fatjets = fatjets[fatjet_mask]
 
@@ -351,6 +492,20 @@ def build_objects(events: ak.Array, config: Dict[str, Any]) -> Dict[str, Any]:
         "muons": selected_muons,
         "electrons": selected_electrons,
         "taus": selected_taus,
+        "tight_muons": tight_muons,
+        "tight_electrons": tight_electrons,
+        "tight_taus": tight_taus,
+        "tight_muons_pt30": tight_muons_pt30,
+        "tight_electrons_pt30": tight_electrons_pt30,
+        "tight_taus_pt30": tight_taus_pt30,
+        "n_z_muons": n_z_muons,
+        "n_z_electrons": n_z_electrons,
+        "mll_mu": mll_mu,
+        "mll_el": mll_el,
+        "z_lep_sum_x_mu": z_lep_sum_x_mu,
+        "z_lep_sum_y_mu": z_lep_sum_y_mu,
+        "z_lep_sum_x_el": z_lep_sum_x_el,
+        "z_lep_sum_y_el": z_lep_sum_y_el,
         "jets": cleaned_jets,
         "fatjets": selected_fatjets,
         "bjets": cleaned_jets[bjet_mask],

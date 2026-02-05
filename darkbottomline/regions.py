@@ -72,10 +72,13 @@ class Region:
 
     def apply_cuts(self, events: ak.Array, objects: Dict[str, Any]) -> ak.Array:
         """
-        Apply region cuts to events.
+        Apply region cuts to events. Logs initial count and one line with events after each cut.
         """
         mask = ak.ones_like(events.event, dtype=bool)
+        n_initial = int(ak.sum(mask))
+        logging.info(f"Region {self.name}: initial (preselected) events: {n_initial}")
 
+        after_cuts = []
         for var, cut_info in self.parsed_cuts.items():
             operator = cut_info["operator"]
             value = cut_info["value"]
@@ -104,14 +107,29 @@ class Region:
                 logging.warning(f"Unknown operator: {operator}")
                 continue
 
-            mask = mask & ak.fill_none(cut_mask, False)
+            mask = mask & ak.fill_none(cut_mask, False, axis=0)
+            n_pass = int(ak.sum(mask))
+            after_cuts.append(f"{var}: {n_pass}")
+
+        if after_cuts:
+            logging.info(" %s", ", ".join(after_cuts))
 
         return mask
+
+    def _safe_num_axis1(self, arr, n_ev: int):
+        """Per-event count; avoid axis=1 on depth-1 arrays (e.g. edge-case structures)."""
+        if arr is None or (isinstance(arr, ak.Array) and len(arr) == 0):
+            return np.zeros(n_ev, dtype=np.int64)
+        try:
+            return ak.num(arr, axis=1)
+        except (Exception, BaseException):
+            return np.zeros(n_ev, dtype=np.int64)
 
     def _get_variable_value(self, events: ak.Array, objects: Dict[str, Any], var: str) -> Optional[ak.Array]:
         """
         Get variable value from events or objects.
         """
+        n_ev = len(events)
         # Special variables
         if var == "MET":
             try:
@@ -125,47 +143,54 @@ class Region:
                 else:
                     return events["MET_pt"]
         if var == "Nbjets":
-            return ak.num(objects.get("bjets", ak.Array([])), axis=1)
+            return self._safe_num_axis1(objects.get("bjets", ak.Array([])), n_ev)
         if var == "Njets" or var == "NjetsMin":
-            return ak.num(objects.get("jets", ak.Array([])), axis=1)
+            return self._safe_num_axis1(objects.get("jets", ak.Array([])), n_ev)
         if var == "Jet1Pt":
             jets = objects.get("jets", ak.Array([]))
             if len(ak.flatten(jets)) == 0:
                 return ak.zeros_like(events.event, dtype=float)
             try:
-                return ak.fill_none(ak.max(jets.pt, axis=1), 0.0)
-            except Exception:
-                return ak.max(jets.pt, axis=1)
+                return ak.fill_none(ak.max(jets.pt, axis=1), 0.0, axis=0)
+            except (Exception, BaseException):
+                return ak.zeros_like(events.event, dtype=float)
         if var == "Nleptons":
-            n_muons = ak.num(objects.get("muons", ak.Array([])), axis=1)
-            n_electrons = ak.num(objects.get("electrons", ak.Array([])), axis=1)
-            n_taus = ak.num(objects.get("taus", ak.Array([])), axis=1)
+            n_muons = self._safe_num_axis1(objects.get("tight_muons_pt30", ak.Array([])), n_ev)
+            n_electrons = self._safe_num_axis1(objects.get("tight_electrons_pt30", ak.Array([])), n_ev)
+            n_taus = self._safe_num_axis1(objects.get("tight_taus_pt30", ak.Array([])), n_ev)
             return n_muons + n_electrons + n_taus
         if var == "Nmuons":
-            return ak.num(objects.get("muons", ak.Array([])), axis=1)
+            return self._safe_num_axis1(objects.get("tight_muons_pt30", ak.Array([])), n_ev)
         if var == "Nelectrons":
-            return ak.num(objects.get("electrons", ak.Array([])), axis=1)
+            return self._safe_num_axis1(objects.get("tight_electrons_pt30", ak.Array([])), n_ev)
+        if var == "NmuonsZ":
+            # Z CR: 2 OS leptons, leading tight pt>30, subleading loose pt>10
+            return objects.get("n_z_muons", ak.zeros_like(events.event, dtype=int))
+        if var == "NelectronsZ":
+            return objects.get("n_z_electrons", ak.zeros_like(events.event, dtype=int))
         if var == "Ntaus":
-            return ak.num(objects.get("taus", ak.Array([])), axis=1)
+            return self._safe_num_axis1(objects.get("tight_taus_pt30", ak.Array([])), n_ev)
         if var == "NAdditionalJets":
-            n_jets = ak.num(objects.get("jets", ak.Array([])), axis=1)
-            n_bjets = ak.num(objects.get("bjets", ak.Array([])), axis=1)
+            n_jets = self._safe_num_axis1(objects.get("jets", ak.Array([])), n_ev)
+            n_bjets = self._safe_num_axis1(objects.get("bjets", ak.Array([])), n_ev)
             return n_jets - n_bjets
         if var == "Recoil":
-            # Recoil = | -( pTmiss + sum pT(leptons) ) |
+            # Recoil = | -( pTmiss + sum pT(leptons) ) | (tight pt>30 leptons for CR)
             met_pt = events["PFMET_pt"] if "PFMET_pt" in events.fields else events["MET_pt"]
             met_phi = events["PFMET_phi"] if "PFMET_phi" in events.fields else events["MET_phi"]
 
-            # Get lepton momenta
-            muons = objects.get("muons", ak.Array([]))
-            electrons = objects.get("electrons", ak.Array([]))
+            muons = objects.get("tight_muons_pt30", ak.Array([]))
+            electrons = objects.get("tight_electrons_pt30", ak.Array([]))
 
-            # Calculate lepton pT sum
+            # Calculate lepton pT sum (axis=1 can fail on depth-1)
             lep_pt_sum = ak.zeros_like(met_pt)
-            if len(ak.flatten(muons)) > 0:
-                lep_pt_sum = lep_pt_sum + ak.sum(muons.pt, axis=1)
-            if len(ak.flatten(electrons)) > 0:
-                lep_pt_sum = lep_pt_sum + ak.sum(electrons.pt, axis=1)
+            try:
+                if len(ak.flatten(muons)) > 0:
+                    lep_pt_sum = lep_pt_sum + ak.sum(muons.pt, axis=1)
+                if len(ak.flatten(electrons)) > 0:
+                    lep_pt_sum = lep_pt_sum + ak.sum(electrons.pt, axis=1)
+            except (Exception, BaseException):
+                pass
 
             # Calculate Recoil magnitude
             recoil_px = -(met_pt * np.cos(met_phi) + lep_pt_sum)
@@ -174,48 +199,67 @@ class Region:
 
             return ak.fill_none(recoil, 0.0)
         if var == "MT":
-            # Transverse mass = sqrt(2 * pT_lepton * MET * (1 - cos(Δφ)))
+            # Transverse mass (tight pt>30 leptons for CR)
             met_pt = events["PFMET_pt"] if "PFMET_pt" in events.fields else events["MET_pt"]
             met_phi = events["PFMET_phi"] if "PFMET_phi" in events.fields else events["MET_phi"]
 
-            muons = objects.get("muons", ak.Array([]))
-            electrons = objects.get("electrons", ak.Array([]))
+            muons = objects.get("tight_muons_pt30", ak.Array([]))
+            electrons = objects.get("tight_electrons_pt30", ak.Array([]))
 
             mt = ak.zeros_like(met_pt)
+            try:
+                # Muon MT (argsort axis=1 can fail on depth-1)
+                has_muons = ak.num(muons) > 0
+                leading_muon = ak.firsts(muons[ak.argsort(muons.pt, ascending=False, axis=1)])
+                muon_pt = leading_muon.pt
+                muon_phi = leading_muon.phi
+                delta_phi_mu = abs(muon_phi - met_phi)
+                delta_phi_mu = ak.where(delta_phi_mu > np.pi, 2 * np.pi - delta_phi_mu, delta_phi_mu)
+                mt_mu = np.sqrt(2 * muon_pt * met_pt * (1 - np.cos(delta_phi_mu)))
+                mt = ak.where(has_muons, mt_mu, mt)
 
-            # Muon MT
-            has_muons = ak.num(muons) > 0
-            leading_muon = ak.firsts(muons[ak.argsort(muons.pt, ascending=False, axis=1)])
-            muon_pt = leading_muon.pt
-            muon_phi = leading_muon.phi
-            delta_phi_mu = abs(muon_phi - met_phi)
-            delta_phi_mu = ak.where(delta_phi_mu > np.pi, 2 * np.pi - delta_phi_mu, delta_phi_mu)
-            mt_mu = np.sqrt(2 * muon_pt * met_pt * (1 - np.cos(delta_phi_mu)))
-            
-            mt = ak.where(has_muons, mt_mu, mt)
-
-            # Electron MT for events without muons
-            has_electrons = ak.num(electrons) > 0
-            leading_electron = ak.firsts(electrons[ak.argsort(electrons.pt, ascending=False, axis=1)])
-            ele_pt = leading_electron.pt
-            ele_phi = leading_electron.phi
-            delta_phi_el = abs(ele_phi - met_phi)
-            delta_phi_el = ak.where(delta_phi_el > np.pi, 2 * np.pi - delta_phi_el, delta_phi_el)
-            mt_el = np.sqrt(2 * ele_pt * met_pt * (1 - np.cos(delta_phi_el)))
-
-            mt = ak.where(~has_muons & has_electrons, mt_el, mt)
-            
-            return ak.fill_none(mt, 0.0)
+                # Electron MT for events without muons
+                has_electrons = ak.num(electrons) > 0
+                leading_electron = ak.firsts(electrons[ak.argsort(electrons.pt, ascending=False, axis=1)])
+                ele_pt = leading_electron.pt
+                ele_phi = leading_electron.phi
+                delta_phi_el = abs(ele_phi - met_phi)
+                delta_phi_el = ak.where(delta_phi_el > np.pi, 2 * np.pi - delta_phi_el, delta_phi_el)
+                mt_el = np.sqrt(2 * ele_pt * met_pt * (1 - np.cos(delta_phi_el)))
+                mt = ak.where(~has_muons & has_electrons, mt_el, mt)
+            except (Exception, BaseException):
+                pass
+            return ak.fill_none(mt, 0.0, axis=0)
         if var in ("Mll", "MllMin", "MllMax"):
-            # Simplified dilepton invariant mass calculation
-            muons = objects.get("muons", ak.Array([]))
-            electrons = objects.get("electrons", ak.Array([]))
-
-            mll = ak.zeros_like(events["event"], dtype=float)
-
-            # For now, return a placeholder value
-            # TODO: Implement proper dilepton mass calculation
-            return ak.fill_none(mll, 0.0)
+            # Z candidate mass: muon pair if NmuonsZ==2 else electron pair if NelectronsZ==2
+            n_z_mu = objects.get("n_z_muons", ak.zeros_like(events.event, dtype=int))
+            n_z_el = objects.get("n_z_electrons", ak.zeros_like(events.event, dtype=int))
+            mll_mu = objects.get("mll_mu", ak.zeros_like(events.event, dtype=float))
+            mll_el = objects.get("mll_el", ak.zeros_like(events.event, dtype=float))
+            mll = ak.where(n_z_mu == 2, mll_mu, ak.where(n_z_el == 2, mll_el, 0.0))
+            # axis=0 to avoid axis=-1 exceeding depth (1) on record/1D arrays
+            try:
+                return ak.fill_none(mll, 0.0, axis=0)
+            except (Exception, BaseException):
+                try:
+                    return np.asarray(ak.to_numpy(ak.ravel(mll)), dtype=np.float64)
+                except (Exception, BaseException):
+                    return np.zeros(n_ev, dtype=np.float64)
+        if var == "RecoilZ":
+            # Recoil from Z candidate pair (for Z CR): |-(MET + sum pT(Z leptons))|
+            met_pt = events["PFMET_pt"] if "PFMET_pt" in events.fields else events["MET_pt"]
+            met_phi = events["PFMET_phi"] if "PFMET_phi" in events.fields else events["MET_phi"]
+            n_z_mu = objects.get("n_z_muons", ak.zeros_like(events.event, dtype=int))
+            n_z_el = objects.get("n_z_electrons", ak.zeros_like(events.event, dtype=int))
+            sx_mu = objects.get("z_lep_sum_x_mu", ak.zeros_like(events.event, dtype=float))
+            sy_mu = objects.get("z_lep_sum_y_mu", ak.zeros_like(events.event, dtype=float))
+            sx_el = objects.get("z_lep_sum_x_el", ak.zeros_like(events.event, dtype=float))
+            sy_el = objects.get("z_lep_sum_y_el", ak.zeros_like(events.event, dtype=float))
+            sx = ak.where(n_z_mu == 2, sx_mu, ak.where(n_z_el == 2, sx_el, 0.0))
+            sy = ak.where(n_z_mu == 2, sy_mu, ak.where(n_z_el == 2, sy_el, 0.0))
+            recoil_x = -(met_pt * np.cos(met_phi) + sx)
+            recoil_y = -(met_pt * np.sin(met_phi) + sy)
+            return ak.fill_none(np.sqrt(recoil_x**2 + recoil_y**2), 0.0)
         if var == "DeltaPhi":
             jets = objects.get("jets", ak.Array([]))
             met_phi = events["PFMET_phi"] if "PFMET_phi" in events.fields else events["MET_phi"]
@@ -225,27 +269,27 @@ class Region:
                 return ak.zeros_like(events["event"], dtype=float)
 
             try:
-                n_jets_per_event = ak.num(jets, axis=1)
-                has_jets = n_jets_per_event > 0
-                if ak.any(has_jets):
+                n_jets_per_event = self._safe_num_axis1(jets, n_ev)
+                has_jets = np.any(np.asarray(n_jets_per_event) > 0)
+                if has_jets:
                     jet_phi = jets.phi
                     delta_phi = ak.min(np.abs(jet_phi - met_phi), axis=1)
-                    return ak.fill_none(delta_phi, 0.0)
-            except Exception:
+                    return ak.fill_none(delta_phi, 0.0, axis=0)
+            except (Exception, BaseException):
                 pass
 
             return ak.zeros_like(events["event"], dtype=float)
         if var == "LeptonPt":
-            muons = objects.get("muons", ak.Array([]))
-            electrons = objects.get("electrons", ak.Array([]))
-            taus = objects.get("taus", ak.Array([]))
-            all_leptons = ak.concatenate([muons, electrons, taus], axis=1)
-            if len(ak.flatten(all_leptons)) == 0:
-                return ak.zeros_like(events.event, dtype=float)
+            muons = objects.get("tight_muons_pt30", ak.Array([]))
+            electrons = objects.get("tight_electrons_pt30", ak.Array([]))
+            taus = objects.get("tight_taus_pt30", ak.Array([]))
             try:
-                return ak.fill_none(ak.max(all_leptons.pt, axis=1), 0.0)
-            except Exception:
-                return ak.max(all_leptons.pt, axis=1)
+                all_leptons = ak.concatenate([muons, electrons, taus], axis=1)
+                if len(ak.flatten(all_leptons)) == 0:
+                    return ak.zeros_like(events.event, dtype=float)
+                return ak.fill_none(ak.max(all_leptons.pt, axis=1), 0.0, axis=0)
+            except (Exception, BaseException):
+                return ak.zeros_like(events.event, dtype=float)
         if var == "metQuality":
             # MET Quality = (pfMET - caloMET) / Recoil
             pf_met = events["PFMET_pt"] if "PFMET_pt" in events.fields else events["MET_pt"]
@@ -254,18 +298,18 @@ class Region:
 
             # Avoid division by zero
             met_quality = ak.where(recoil > 0, (pf_met - calo_met) / recoil, 0.0)
-            return ak.fill_none(met_quality, 0.0)
+            return ak.fill_none(met_quality, 0.0, axis=0)
 
-        # Direct from events/objects
+        # Direct from events/objects (axis=0 to avoid depth-1 fill_none error)
         if hasattr(events, var):
             try:
-                return ak.fill_none(getattr(events, var), 0)
+                return ak.fill_none(getattr(events, var), 0, axis=0)
             except Exception:
                 return getattr(events, var)
         for obj_name, obj_data in objects.items():
             if hasattr(obj_data, var):
                 try:
-                    return ak.fill_none(getattr(obj_data, var), 0)
+                    return ak.fill_none(getattr(obj_data, var), 0, axis=0)
                 except Exception:
                     return getattr(obj_data, var)
         return ak.zeros_like(events.event, dtype=float)
@@ -306,9 +350,7 @@ class RegionManager:
         region_masks = {}
         for region_name, region in self.regions.items():
             mask = region.apply_cuts(events, objects)
-            region_masks[region_name] = ak.fill_none(mask, False)
-            n_events = ak.sum(region_masks[region_name])
-            logging.info(f"Region {region_name}: {n_events} events")
+            region_masks[region_name] = ak.fill_none(mask, False, axis=0)
         return region_masks
 
     def validate_regions(self, events: ak.Array, objects: Dict[str, Any]) -> Dict[str, Any]:

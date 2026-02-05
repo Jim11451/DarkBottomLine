@@ -95,8 +95,38 @@ def select_events(
     met_pt = events["PFMET_pt"] if "PFMET_pt" in events.fields else events["MET_pt"]
     met_cut = met_pt > selection["met_min"]
 
+    # Leading jet pT cut (paper: leading jet pT > 100 GeV)
+    jet1_pt_min = selection.get("jet1_pt_min")
+    if jet1_pt_min is not None:
+        jets = objects.get("jets", ak.Array([]))
+        if len(ak.flatten(jets)) > 0:
+            leading_jet_pt = ak.fill_none(ak.max(jets.pt, axis=1), 0.0)
+            jet1_pt_cut = leading_jet_pt > jet1_pt_min
+        else:
+            jet1_pt_cut = ak.zeros_like(events["event"], dtype=bool)
+    else:
+        jet1_pt_cut = ak.ones_like(events["event"], dtype=bool)
+
+    # min DeltaPhi(jet, pTmiss) > threshold (paper: > 0.5 for QCD multijet suppression)
+    delta_phi_min = selection.get("delta_phi_min")
+    if delta_phi_min is not None:
+        jets = objects.get("jets", ak.Array([]))
+        met_phi = events["PFMET_phi"] if "PFMET_phi" in events.fields else events["MET_phi"]
+        if len(ak.flatten(jets)) > 0:
+            dphi = np.abs(jets.phi - met_phi)
+            dphi = np.where(dphi > np.pi, 2 * np.pi - dphi, dphi)
+            min_dphi = ak.fill_none(ak.min(dphi, axis=1), 0.0)
+            delta_phi_cut = min_dphi > delta_phi_min
+        else:
+            delta_phi_cut = ak.zeros_like(events["event"], dtype=bool)
+    else:
+        delta_phi_cut = ak.ones_like(events["event"], dtype=bool)
+
     # Combine all cuts
-    event_mask = muon_cut & electron_cut & tau_cut & jet_cut & bjet_cut & met_cut
+    event_mask = (
+        muon_cut & electron_cut & tau_cut & jet_cut & bjet_cut & met_cut
+        & jet1_pt_cut & delta_phi_cut
+    )
 
     return event_mask
 
