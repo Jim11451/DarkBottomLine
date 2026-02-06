@@ -143,12 +143,17 @@ def select_jets(events: ak.Array, config: Dict[str, Any]) -> ak.Array:
     Returns:
         Boolean mask for selected jets
     """
-    jets = ak.zip({
+    jet_fields = {
         "pt": events["Jet_pt"],
         "eta": events["Jet_eta"],
         "phi": events["Jet_phi"],
         "btagDeepFlavB": events["Jet_btagDeepFlavB"],
-    })
+    }
+    if "Jet_hadronFlavour" in events.fields:
+        jet_fields["hadronFlavour"] = events["Jet_hadronFlavour"]
+    elif "Jet_partonFlavour" in events.fields:
+        jet_fields["hadronFlavour"] = events["Jet_partonFlavour"]
+    jets = ak.zip(jet_fields)
 
     # Basic kinematic cuts
     pt_mask = jets.pt > config["pt_min"]
@@ -427,12 +432,17 @@ def build_objects(events: ak.Array, config: Dict[str, Any]) -> Dict[str, Any]:
         "decayMode": events["Tau_decayMode"],
     })
 
-    jets = ak.zip({
+    jet_fields = {
         "pt": events["Jet_pt"],
         "eta": events["Jet_eta"],
         "phi": events["Jet_phi"],
         "btagDeepFlavB": events["Jet_btagDeepFlavB"],
-    })
+    }
+    if "Jet_hadronFlavour" in events.fields:
+        jet_fields["hadronFlavour"] = events["Jet_hadronFlavour"]
+    elif "Jet_partonFlavour" in events.fields:
+        jet_fields["hadronFlavour"] = events["Jet_partonFlavour"]
+    jets = ak.zip(jet_fields)
 
     fatjets = ak.zip({
         "pt": events["FatJet_pt"],

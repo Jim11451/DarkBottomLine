@@ -259,6 +259,18 @@ class CorrectionManager:
                         "(bin edges fixed for correctionlib)"
                     )
                     loaded = True
+            # For b-tag SF (.gz): load via gzip + from_string (BTV convention)
+            if not loaded and correction_type == "btagSF" and file_path.endswith(".gz"):
+                resolved_path = _resolve_correction_path(file_path)
+                path_to_try = str(resolved_path) if resolved_path is not None else file_path
+                try:
+                    with gzip.open(path_to_try, "rt") as f:
+                        data = f.read().strip()
+                    self.corrections[correction_type] = CorrectionSet.from_string(data)
+                    logging.info(f"Loaded {correction_type} corrections from {path_to_try} (gzip)")
+                    loaded = True
+                except Exception as e:
+                    logging.warning(f"Failed to load {correction_type} (gzip): {e}")
             if not loaded:
                 resolved_path = _resolve_correction_path(file_path)
                 path_to_try = str(resolved_path) if resolved_path is not None else file_path
@@ -558,18 +570,56 @@ class CorrectionManager:
         return out
 
     def _get_btag_sf_correction(self):
-        """Return the b-tag SF correction evaluator from the loaded CorrectionSet."""
+        """Return the b-tag SF correction (deepJet_shape). Safe lookup, no 'in cs'."""
         if "btagSF" not in self.corrections:
             return None
         cs = self.corrections["btagSF"]
         for name in ("deepJet_shape", "btagSF", "btag_sf", "BTV"):
-            if name in cs:
+            try:
                 return cs[name]
-        if hasattr(cs, "keys"):
-            first = next(iter(cs.keys()), None)
-            if first is not None:
-                return cs[first]
+            except (IndexError, KeyError, TypeError):
+                continue
+        try:
+            keys = list(cs.keys()) if hasattr(cs, "keys") else []
+            if keys:
+                return cs[keys[0]]
+        except Exception:
+            pass
         return None
+
+    def _evaluate_btag_sf(
+        self,
+        jets: ak.Array,
+        corr,
+        systematic: str,
+    ) -> Optional[ak.Array]:
+        """
+        B-tag shape SF: evaluate(systematic, flavor, eta, pt, discriminator).
+        Flavor: 0=udsg, 4=c, 5=b (hadronFlavour). Returns jagged SF array or None.
+        """
+        if corr is None:
+            return None
+        flavor = getattr(jets, "hadronFlavour", None)
+        if flavor is None:
+            flavor = ak.zeros_like(jets.pt, dtype=np.int32)
+        eta = np.asarray(ak.ravel(np.abs(jets.eta)), dtype=float)
+        pt = np.asarray(ak.ravel(jets.pt), dtype=float)
+        discr = np.asarray(ak.ravel(jets.btagDeepFlavB), dtype=float)
+        flavor_flat = np.asarray(ak.ravel(flavor), dtype=np.int32)
+        n = len(pt)
+        if n == 0:
+            return ak.ones_like(jets.pt, dtype=float)
+        try:
+            sf = np.asarray(
+                corr.evaluate(systematic, flavor_flat, eta, pt, discr),
+                dtype=float,
+            )
+            if sf.shape != (n,):
+                return None
+            counts = np.asarray(ak.num(jets.pt, axis=1))
+            return ak.unflatten(ak.Array(sf), counts)
+        except Exception:
+            return None
 
     def get_btag_sf(
         self,
@@ -577,41 +627,30 @@ class CorrectionManager:
         systematic: str = "central"
     ) -> ak.Array:
         """
-        Get b-tagging scale factors for jets. Uses jagged-then-flat pattern for correctionlib.
+        Get b-tagging scale factors (deepJet_shape): evaluate(systematic, flavor, eta, pt, discriminator).
+        Central/up/down via systematic string.
         """
         ones = ak.ones_like(jets.pt, dtype=float)
         if not jets.pt.layout or len(ak.ravel(jets.pt)) == 0:
             return ones
         corr = self._get_btag_sf_correction()
-        if corr is None:
-            return ones
-        flavor = jets.hadronFlavour
-        eta = abs(jets.eta)
-        pt = jets.pt
-        # Common signatures: (flavor, eta, pt), (flavor, eta, pt, systematic)
-        for args in [(flavor, eta, pt), (flavor, eta, pt, systematic), (systematic, flavor, eta, pt)]:
-            out = self._evaluate_correction_jagged_or_flat(corr, pt, *args)
-            if out is not None:
-                return out
-        logging.warning("B-tag SF evaluate failed for all tried signatures")
+        out = self._evaluate_btag_sf(jets, corr, systematic)
+        if out is not None:
+            return out
+        logging.warning("B-tag SF evaluate failed")
         return ones
 
     def get_btag_sf_nominal_up_down(self, jets: ak.Array) -> Dict[str, ak.Array]:
-        """Get b-tag SF as central, up, down (same pattern as electron)."""
+        """Get b-tag SF as central, up, down (deepJet_shape systematics)."""
         ones = ak.ones_like(jets.pt, dtype=float)
         out = {"central": ones, "up": ones, "down": ones}
         corr = self._get_btag_sf_correction()
         if corr is None:
             return out
-        flavor = jets.hadronFlavour
-        eta = abs(jets.eta)
-        pt = jets.pt
-        for syst, key in [("central", "central"), ("up", "up"), ("down", "down")]:
-            for args in [(flavor, eta, pt), (flavor, eta, pt, syst), (syst, flavor, eta, pt)]:
-                val = self._evaluate_correction_jagged_or_flat(corr, pt, *args)
-                if val is not None:
-                    out[key] = val
-                    break
+        for key, syst in [("central", "central"), ("up", "up"), ("down", "down")]:
+            val = self._evaluate_btag_sf(jets, corr, syst)
+            if val is not None:
+                out[key] = val
         return out
 
     def _per_event_product(self, jagged_sf: ak.Array) -> ak.Array:

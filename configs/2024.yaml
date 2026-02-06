@@ -76,10 +76,10 @@ event_selection:
   min_electrons: 0
   max_electrons: 2
   min_taus: 0
-  max_taus: 2
+  max_taus: 0
   min_jets: 1
   min_bjets: 1
-  met_min: 250.0
+  met_min: 250.0    # event passes if MET > 250 GeV or Recoil > 250 GeV
   jet1_pt_min: 100.0
   delta_phi_min: 0.5
 
