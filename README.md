@@ -122,9 +122,9 @@ Every time you start a new shell session on lxplus, you need to:
    darkbottomline --help
    # Or:
    python3 -c "from darkbottomline import DarkBottomLineProcessor; print('✓ Import successful')"
-``` 
-   
-   
+```
+
+
 #### Condor Setup
 ```bash
 cd condorJobs
@@ -354,6 +354,10 @@ corrections:
   btagSF: data/corrections/btagging_2023.json.gz
   muonSF: data/corrections/muonSF_2023.json.gz
   electronSF: data/corrections/electronSF_2023.json.gz
+
+# Electron SF: Use EGM electron.json.gz (e.g. from jsonpog-integration). If loading fails with
+# "binning edges are not monotone increasing", the code applies an automatic fix when loading.
+# See: https://cms-analysis-corrections.docs.cern.ch/ (Run3 EGM corrections).
 
 # Trigger paths
 triggers:
@@ -627,7 +631,7 @@ conda install -c conda-forge root
    pip install -e .
    ```
 
-3. **Memory issues**: 
+3. **Memory issues**:
    - Use `--max-events` to limit events for testing:
      ```bash
      darkbottomline analyze ... --max-events 10000

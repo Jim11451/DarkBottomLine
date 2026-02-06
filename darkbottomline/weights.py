@@ -119,25 +119,42 @@ class WeightCalculator:
         """
         self.add_weight("btag_sf", btag_sf)
 
-    def add_corrections(self, corrections: Dict[str, Union[ak.Array, np.ndarray]]):
+    def add_corrections(
+        self,
+        corrections: Dict[str, Union[ak.Array, np.ndarray, Dict[str, Union[ak.Array, np.ndarray]]]]
+    ):
         """
         Add multiple corrections at once.
 
         Args:
-            corrections: Dictionary of correction names and values
+            corrections: Dictionary of correction names and values. Each value is either
+                a per-event array (e.g. pileup) or a dict {"central", "up", "down"} so
+                the combined weight uses central only and variations use up/down.
         """
         for name, weight in corrections.items():
-            self.add_weight(name, weight)
+            if isinstance(weight, dict) and "central" in weight:
+                self.add_weight(
+                    name,
+                    weight["central"],
+                    weightUp=weight.get("up"),
+                    weightDown=weight.get("down"),
+                )
+            else:
+                self.add_weight(name, weight)
 
     def get_weight(self, variation: str = "central") -> Union[ak.Array, np.ndarray]:
         """
         Get the combined weight for a given variation.
 
+        Final event weight = product of all per-event weights (generator, pileup,
+        weight_muon_id, weight_electron_id, weight_btag, etc.). Each component is
+        the product over objects (e.g. weight_btag = product of all b-tag SFs).
+
         Args:
             variation: Weight variation ("central", "up", "down")
 
         Returns:
-            Combined weight array
+            Combined weight array (one value per event)
         """
         if COFFEA_WEIGHTS_AVAILABLE:
             if variation == "central":

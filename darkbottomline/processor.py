@@ -23,6 +23,59 @@ from .weights import WeightCalculator
 from .histograms import HistogramManager
 
 
+def _build_event_weights_for_save(
+    events: ak.Array,
+    corrections: Dict[str, Any],
+    weight_calculator: WeightCalculator,
+) -> Dict[str, Any]:
+    """
+    Build a dict of per-event weights (central/up/down per systematic) for saving.
+
+    Returns dict with: generator, pileup, weight_* (central/up/down per systematic only),
+    weight_total_nominal (combined nominal; no total up/down saved).
+    """
+    n = len(events)
+    out = {}
+
+    # Generator (central only)
+    if hasattr(events, "genWeight"):
+        out["generator"] = np.asarray(ak.to_numpy(np.abs(events.genWeight)))
+    else:
+        out["generator"] = np.ones(n, dtype=np.float64)
+
+    # Corrections: each key is either a single array (e.g. pileup) or dict with central/up/down
+    for name, val in corrections.items():
+        if isinstance(val, dict) and "central" in val:
+            out[name] = {}
+            for k in ("central", "up", "down"):
+                if val.get(k) is not None:
+                    out[name][k] = np.asarray(ak.to_numpy(val[k]))
+        else:
+            arr = val
+            if hasattr(arr, "__len__") and not isinstance(arr, (str, dict)):
+                out[name] = np.asarray(ak.to_numpy(arr))
+            else:
+                out[name] = np.full(n, float(arr), dtype=np.float64)
+
+    # Combined nominal total weight only (no total up/down)
+    out["weight_total_nominal"] = np.asarray(ak.to_numpy(weight_calculator.get_weight("central")))
+
+    return out
+
+
+def _event_weights_flat_columns(event_weights: Dict[str, Any]) -> Dict[str, np.ndarray]:
+    """Flatten event_weights into a dict of 1D arrays for parquet/ROOT columns."""
+    cols = {}
+    for name, val in event_weights.items():
+        if isinstance(val, dict):
+            for var, arr in val.items():
+                if isinstance(arr, np.ndarray):
+                    cols[f"{name}_{var}"] = arr
+        elif isinstance(val, np.ndarray):
+            cols[name] = val
+    return cols
+
+
 class DarkBottomLineProcessor:
     """
     Main processor class for DarkBottomLine analysis.
@@ -45,6 +98,7 @@ class DarkBottomLineProcessor:
             "histograms": self.histograms,
             "cutflow": {},
             "metadata": {},
+            "event_weights": {},
         }
 
         logging.info(f"Initialized DarkBottomLine processor for year {config.get('year', 'unknown')}")
@@ -118,19 +172,24 @@ class DarkBottomLineProcessor:
             # Add corrections
             weight_calculator.add_corrections(corrections)
 
-            # Get final weights
+            # Get final weights (nominal = central for histogram filling)
             event_weights = weight_calculator.get_weight("central")
             print(f"  Weights calculated successfully: {len(event_weights)} weights")
+
+            # Build per-event weight dict for each systematic (central/up/down) for saving
+            event_weights_save = _build_event_weights_for_save(
+                selected_events, corrections, weight_calculator
+            )
         except Exception as e:
             print(f"  Error in weight calculation: {e}")
             print(f"  Selected events length: {len(selected_events)}")
             raise
 
-        # Fill histograms
+        # Fill histograms with nominal total weight
         print("Step 4: Filling histograms...")
         print(f"  Selected events: {len(selected_events)}")
         print(f"  Event weights shape: {event_weights.shape if hasattr(event_weights, 'shape') else len(event_weights)}")
-        logging.info("Filling histograms...")
+        logging.info("Filling histograms with nominal total weight...")
         try:
             filled_histograms = self.histogram_manager.fill_histograms(
                 selected_events, selected_objects, event_weights
@@ -142,15 +201,20 @@ class DarkBottomLineProcessor:
             print(f"  Objects keys: {list(selected_objects.keys())}")
             for key, obj in selected_objects.items():
                 if isinstance(obj, ak.Array):
-                    print(f"    {key}: {len(obj)} events, {ak.num(obj, axis=1).sum()} total objects")
+                    try:
+                        n_total = ak.num(obj, axis=1).sum()
+                    except Exception:
+                        n_total = len(obj)
+                    print(f"    {key}: {len(obj)} events, {n_total} total objects")
             raise
 
         # Calculate processing statistics
         processing_time = time.time() - start_time
 
-        # Update accumulator
+        # Update accumulator (histograms with nominal weight; all systematic weights saved)
         self.accumulator["histograms"] = filled_histograms
         self.accumulator["cutflow"] = cutflow
+        self.accumulator["event_weights"] = event_weights_save
         self.accumulator["metadata"] = {
             "n_events_processed": len(events),
             "n_events_selected": len(selected_events),
@@ -381,10 +445,10 @@ class DarkBottomLineProcessor:
             self._save_pickle(output_file)
 
     def _save_parquet(self, output_file: str):
-        """Save results as Parquet file."""
+        """Save results as Parquet file (histograms + per-event weights)."""
         import pandas as pd
 
-        # Convert histograms to DataFrame format
+        # Histogram data
         data = {}
         for name, hist in self.accumulator["histograms"].items():
             if hasattr(hist, 'values'):
@@ -392,12 +456,19 @@ class DarkBottomLineProcessor:
             else:
                 data[name] = hist.get("values", [])
 
+        # Per-event weights (central/up/down per systematic)
+        event_weights = self.accumulator.get("event_weights", {})
+        if event_weights:
+            flat = _event_weights_flat_columns(event_weights)
+            for k, v in flat.items():
+                data[k] = v
+
         df = pd.DataFrame(data)
         df.to_parquet(output_file)
         logging.info(f"Saved results to {output_file}")
 
     def _save_root(self, output_file: str):
-        """Save results as ROOT file."""
+        """Save results as ROOT file (histograms + per-event weight tree)."""
         try:
             import uproot
             with uproot.recreate(output_file) as f:
@@ -408,6 +479,13 @@ class DarkBottomLineProcessor:
 
                 # Save metadata
                 f["metadata"] = self.accumulator["metadata"]
+
+                # Per-event weights as TTree (flat columns)
+                event_weights = self.accumulator.get("event_weights", {})
+                if event_weights:
+                    flat = _event_weights_flat_columns(event_weights)
+                    if flat:
+                        f["event_weights"] = flat
 
             logging.info(f"Saved results to {output_file}")
         except ImportError:

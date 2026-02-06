@@ -91,12 +91,62 @@ def select_events(
     jet_cut = n_jets >= selection["min_jets"]
     bjet_cut = n_bjets >= selection["min_bjets"]
 
-    # MET cut
+    # MET or Recoil cut: pass if either MET > met_min or Recoil > met_min
     met_pt = events["PFMET_pt"] if "PFMET_pt" in events.fields else events["MET_pt"]
-    met_cut = met_pt > selection["met_min"]
+    met_phi = events["PFMET_phi"] if "PFMET_phi" in events.fields else events["MET_phi"]
+    met_min = selection["met_min"]
+    met_cut = met_pt > met_min
 
-    # Combine all cuts
-    event_mask = muon_cut & electron_cut & tau_cut & jet_cut & bjet_cut & met_cut
+    # Recoil = | -( pTmiss + sum pT(leptons) ) | (same convention as region Recoil)
+    muons = objects.get("muons", ak.Array([]))
+    electrons = objects.get("electrons", ak.Array([]))
+    lep_pt_sum = ak.zeros_like(met_pt)
+    try:
+        if len(ak.flatten(muons)) > 0:
+            lep_pt_sum = lep_pt_sum + ak.sum(muons.pt, axis=1)
+        if len(ak.flatten(electrons)) > 0:
+            lep_pt_sum = lep_pt_sum + ak.sum(electrons.pt, axis=1)
+    except (Exception, BaseException):
+        pass
+    recoil_px = -(met_pt * np.cos(met_phi) + ak.fill_none(lep_pt_sum, 0.0))
+    recoil_py = -(met_pt * np.sin(met_phi))
+    recoil = np.sqrt(recoil_px**2 + recoil_py**2)
+    recoil_cut = recoil > met_min
+
+    met_or_recoil_cut = met_cut | recoil_cut
+
+    # Leading jet pT cut (paper: leading jet pT > 100 GeV)
+    jet1_pt_min = selection.get("jet1_pt_min")
+    if jet1_pt_min is not None:
+        jets = objects.get("jets", ak.Array([]))
+        if len(ak.flatten(jets)) > 0:
+            leading_jet_pt = ak.fill_none(ak.max(jets.pt, axis=1), 0.0)
+            jet1_pt_cut = leading_jet_pt > jet1_pt_min
+        else:
+            jet1_pt_cut = ak.zeros_like(events["event"], dtype=bool)
+    else:
+        jet1_pt_cut = ak.ones_like(events["event"], dtype=bool)
+
+    # min DeltaPhi(jet, pTmiss) > threshold (paper: > 0.5 for QCD multijet suppression)
+    delta_phi_min = selection.get("delta_phi_min")
+    if delta_phi_min is not None:
+        jets = objects.get("jets", ak.Array([]))
+        met_phi = events["PFMET_phi"] if "PFMET_phi" in events.fields else events["MET_phi"]
+        if len(ak.flatten(jets)) > 0:
+            dphi = np.abs(jets.phi - met_phi)
+            dphi = np.where(dphi > np.pi, 2 * np.pi - dphi, dphi)
+            min_dphi = ak.fill_none(ak.min(dphi, axis=1), 0.0)
+            delta_phi_cut = min_dphi > delta_phi_min
+        else:
+            delta_phi_cut = ak.zeros_like(events["event"], dtype=bool)
+    else:
+        delta_phi_cut = ak.ones_like(events["event"], dtype=bool)
+
+    # Combine all cuts (met_min: either MET or Recoil above threshold)
+    event_mask = (
+        muon_cut & electron_cut & tau_cut & jet_cut & bjet_cut & met_or_recoil_cut
+        & jet1_pt_cut & delta_phi_cut
+    )
 
     return event_mask
 

@@ -340,7 +340,7 @@ def run_analyzer(args):
                 analyzer.save_results(args.output)
 
     except Exception as e:
-        logging.error(f"Error in multi-region analysis: {e}")
+        logging.error("Error in multi-region analysis: %s", e, exc_info=True)
         raise
 
     logging.info("Multi-region analysis completed!")
@@ -429,7 +429,7 @@ def make_single_plots(args):
     import awkward as ak
     with open(args.input, 'rb') as f:
         loaded_data = pickle.load(f)
-    
+
     events_list = loaded_data.get('events')
     objects_dict_list = loaded_data.get('objects')
 
@@ -452,7 +452,7 @@ def make_single_plots(args):
     # or that default parameters are sufficient.
     from .histograms import HistogramManager
     histogram_manager = HistogramManager()
-    
+
     # Define histograms
     defined_histograms = histogram_manager.define_histograms()
 
@@ -466,7 +466,7 @@ def make_single_plots(args):
     filled_histograms = histogram_manager.fill_histograms(
         events, objects, dummy_weights
     )
-    
+
     # Construct a results dictionary that the PlotManager expects
     # For event-level plots, we create a pseudo-results dict with only the 'histograms'
     pseudo_results = {"histograms": filled_histograms}

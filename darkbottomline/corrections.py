@@ -3,9 +3,13 @@ Correction and scale factor calculations using correctionlib.
 """
 
 import awkward as ak
-import numpy as np
-from typing import Dict, Any, Optional, Union
+import gzip
+import json
 import logging
+import numpy as np
+import tempfile
+from pathlib import Path
+from typing import Dict, Any, Optional, Union, List
 
 try:
     from correctionlib import CorrectionSet
@@ -13,6 +17,204 @@ try:
 except ImportError:
     CORRECTIONLIB_AVAILABLE = False
     logging.warning("correctionlib not available. Corrections will be disabled.")
+
+try:
+    import correctionlib.schemav2 as _correctionlib_schemav2
+    _SCHEMAV2_AVAILABLE = True
+except ImportError:
+    _SCHEMAV2_AVAILABLE = False
+
+
+def _to_edge_float(x: Any) -> float:
+    """Convert correctionlib edge value to float for ordering."""
+    if isinstance(x, (int, float)):
+        return float(x)
+    if x == "inf" or x == "+inf":
+        return float("inf")
+    if x == "-inf":
+        return float("-inf")
+    return float(x)
+
+
+def _make_edges_strictly_increasing(edges: List[Any]) -> List[Any]:
+    """
+    Return a new list of edges that is strictly increasing (no duplicates).
+    Nudges duplicate finite values; skips duplicate inf/-inf so correctionlib's
+    hi <= lo check passes (parsed "inf" becomes float('inf'), so duplicate inf fails).
+    """
+    if not edges or len(edges) < 2:
+        return list(edges)
+    try:
+        sorted_edges = sorted(edges, key=_to_edge_float)
+        out: List[Any] = [sorted_edges[0]]
+        for i in range(1, len(sorted_edges)):
+            prev_f = _to_edge_float(out[-1])
+            curr_f = _to_edge_float(sorted_edges[i])
+            if curr_f > prev_f:
+                out.append(sorted_edges[i])
+            elif curr_f <= prev_f and float("-inf") < prev_f < float("inf"):
+                nudge = prev_f + max(1.0e-6, abs(prev_f) * 1.0e-10)
+                out.append(nudge)
+            # else: duplicate inf/-inf; skip (do not append) so list stays strictly increasing
+        return out
+    except (TypeError, ValueError):
+        return list(edges)
+
+
+def _fix_all_edges_in_place(node: Any) -> None:
+    """
+    Traverse entire JSON and fix every "edges" list to be strictly increasing.
+    When duplicate inf/-inf are skipped, edges get shorter; trim content to match
+    (content length must equal product of (len(edges[i])-1) for MultiBinning, len(edges)-1 for Binning).
+    Modifies node in place.
+    """
+    if isinstance(node, dict):
+        if "edges" in node:
+            edges_val = node["edges"]
+            if isinstance(edges_val, list):
+                if len(edges_val) > 0 and isinstance(edges_val[0], list):
+                    # MultiBinning: fix each dimension's edges
+                    for dim in range(len(edges_val)):
+                        if isinstance(edges_val[dim], list):
+                            node["edges"][dim] = _make_edges_strictly_increasing(edges_val[dim])
+                    # Content length must equal product of (len(edges[i])-1)
+                    new_len = 1
+                    for dim_edges in node["edges"]:
+                        if isinstance(dim_edges, list):
+                            new_len *= max(0, len(dim_edges) - 1)
+                    content = node.get("content")
+                    if isinstance(content, list) and len(content) > new_len:
+                        node["content"] = content[:new_len]
+                else:
+                    # Binning: single edge array
+                    node["edges"] = _make_edges_strictly_increasing(edges_val)
+                    new_len = max(0, len(node["edges"]) - 1)
+                    content = node.get("content")
+                    if isinstance(content, list) and len(content) > new_len:
+                        node["content"] = content[:new_len]
+        for v in node.values():
+            _fix_all_edges_in_place(v)
+    elif isinstance(node, list):
+        for item in node:
+            _fix_all_edges_in_place(item)
+
+
+def _fix_binning_edges(node: Any) -> None:
+    """
+    Recursively fix correction JSON so all binning edges are strictly increasing.
+    Modifies node in place. Handles Binning (sort edges, reorder content, remove
+    duplicate edges) and MultiBinning (sort each dimension's edges).
+    Then runs a second pass that fixes every "edges" key in the tree (catches any
+    structure we might have missed).
+    See: https://cms-analysis-corrections.docs.cern.ch/ and correctionlib schema v2.
+    """
+    if not isinstance(node, dict):
+        return
+    nodetype = node.get("nodetype")
+    if nodetype == "binning":
+        edges = node.get("edges")
+        content = node.get("content")
+        if isinstance(edges, list) and isinstance(content, list) and len(content) == len(edges) - 1:
+            try:
+                order = sorted(range(len(edges)), key=lambda i: _to_edge_float(edges[i]))
+                sorted_edges = [edges[i] for i in order]
+                new_edges: List[Any] = [sorted_edges[0]]
+                new_content: List[Any] = []
+                for i in range(1, len(sorted_edges)):
+                    if _to_edge_float(sorted_edges[i]) > _to_edge_float(new_edges[-1]):
+                        new_edges.append(sorted_edges[i])
+                        new_content.append(content[order[i - 1]])
+                if len(new_edges) >= 2 and len(new_content) == len(new_edges) - 1:
+                    node["edges"] = new_edges
+                    node["content"] = new_content
+                else:
+                    node["edges"] = sorted_edges
+                    node["content"] = [content[order[i]] for i in range(len(sorted_edges) - 1)]
+                edges_final = node["edges"]
+                for j in range(1, len(edges_final)):
+                    try:
+                        p, c = _to_edge_float(edges_final[j - 1]), _to_edge_float(edges_final[j])
+                        if c <= p and float("-inf") < p < float("inf"):
+                            edges_final[j] = p + max(1.0e-6, abs(p) * 1.0e-10)
+                    except (TypeError, ValueError):
+                        pass
+            except (TypeError, ValueError):
+                pass
+        for c in node.get("content", []):
+            _fix_binning_edges(c)
+        flow = node.get("flow")
+        if flow is not None and isinstance(flow, dict):
+            _fix_binning_edges(flow)
+    elif nodetype == "multibinning":
+        edges_arr = node.get("edges")
+        if isinstance(edges_arr, list):
+            for dim, edges in enumerate(edges_arr):
+                if isinstance(edges, list):
+                    try:
+                        node["edges"][dim] = _make_edges_strictly_increasing(edges)
+                    except (TypeError, ValueError):
+                        pass
+        for c in node.get("content", []):
+            if isinstance(c, dict):
+                _fix_binning_edges(c)
+        flow = node.get("flow")
+        if flow is not None and isinstance(flow, dict):
+            _fix_binning_edges(flow)
+    else:
+        for v in node.values():
+            if isinstance(v, dict):
+                _fix_binning_edges(v)
+            elif isinstance(v, list):
+                for item in v:
+                    if isinstance(item, dict):
+                        _fix_binning_edges(item)
+
+
+def _resolve_correction_path(file_path: str) -> Optional[Path]:
+    """Resolve correction file path: try as-is, then relative to package (project) root."""
+    path = Path(file_path)
+    if path.exists():
+        return path
+    # When running as module (e.g. python -m darkbottomline.cli), cwd may not be project root
+    try:
+        project_root = Path(__file__).resolve().parent.parent
+        alt = project_root / file_path
+        if alt.exists():
+            return alt
+    except Exception:
+        pass
+    return None
+
+
+def _load_correction_file_with_edges_fix(file_path: str) -> Optional[CorrectionSet]:
+    """Load a correction file; fix non-monotonic or duplicate bin edges then load via from_string."""
+    path = _resolve_correction_path(file_path)
+    if path is None:
+        logging.debug("Correction file not found for edge fix: %s", file_path)
+        return None
+    try:
+        with gzip.open(path, "rt", encoding="utf-8") if path.suffix == ".gz" else open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception as e:
+        logging.debug("Failed to read correction file for edge fix: %s", e)
+        return None
+    _fix_binning_edges(data)
+    _fix_all_edges_in_place(data)  # Second pass: fix every "edges" in tree (any structure)
+    try:
+        # C library validates edges; pydantic-validated JSON (type-coerced) is accepted
+        if _SCHEMAV2_AVAILABLE and data.get("schema_version") == 2:
+            cs_py = _correctionlib_schemav2.CorrectionSet.parse_obj(data)
+            json_str = cs_py.json(exclude_unset=True)
+            return CorrectionSet.from_string(json_str)
+        return CorrectionSet.from_string(json.dumps(data))
+    except Exception as e:
+        logging.warning(
+            "CorrectionSet.from_string failed after bin-edge fix for %s: %s",
+            file_path,
+            e,
+            exc_info=False,
+        )
+        return None
 
 
 class CorrectionManager:
@@ -38,16 +240,57 @@ class CorrectionManager:
             return
 
         correction_paths = self.config.get("corrections", {})
+        # Only process keys that are correction file paths (skip electron_sf_year, etc.)
+        file_correction_keys = {k for k, v in correction_paths.items()
+                                if isinstance(v, str) and v.endswith(('.json', '.json.gz'))}
 
-        for correction_type, file_path in correction_paths.items():
-            try:
-                if file_path and file_path.endswith(('.json', '.json.gz')):
-                    self.corrections[correction_type] = CorrectionSet.from_file(file_path)
-                    logging.info(f"Loaded {correction_type} corrections from {file_path}")
-                else:
-                    logging.warning(f"Correction file {file_path} not found or invalid format")
-            except Exception as e:
-                logging.warning(f"Failed to load {correction_type} corrections: {e}")
+        for correction_type in file_correction_keys:
+            file_path = correction_paths[correction_type]
+            if not file_path:
+                continue
+            loaded = False
+            # For electron SF, try edge-fix load first (EGM JSON can have non-monotonic bin edges)
+            if correction_type == "electronSF":
+                cs = _load_correction_file_with_edges_fix(file_path)
+                if cs is not None:
+                    self.corrections[correction_type] = cs
+                    logging.info(
+                        f"Loaded {correction_type} corrections from {file_path} "
+                        "(bin edges fixed for correctionlib)"
+                    )
+                    loaded = True
+            # For b-tag SF (.gz): load via gzip + from_string (BTV convention)
+            if not loaded and correction_type == "btagSF" and file_path.endswith(".gz"):
+                resolved_path = _resolve_correction_path(file_path)
+                path_to_try = str(resolved_path) if resolved_path is not None else file_path
+                try:
+                    with gzip.open(path_to_try, "rt") as f:
+                        data = f.read().strip()
+                    self.corrections[correction_type] = CorrectionSet.from_string(data)
+                    logging.info(f"Loaded {correction_type} corrections from {path_to_try} (gzip)")
+                    loaded = True
+                except Exception as e:
+                    logging.warning(f"Failed to load {correction_type} (gzip): {e}")
+            if not loaded:
+                resolved_path = _resolve_correction_path(file_path)
+                path_to_try = str(resolved_path) if resolved_path is not None else file_path
+                try:
+                    self.corrections[correction_type] = CorrectionSet.from_file(path_to_try)
+                    logging.info(f"Loaded {correction_type} corrections from {path_to_try}")
+                    loaded = True
+                except Exception as e:
+                    err_msg = str(e).lower()
+                    if "monotone" in err_msg or "monotonic" in err_msg:
+                        cs = _load_correction_file_with_edges_fix(file_path)
+                        if cs is not None:
+                            self.corrections[correction_type] = cs
+                            logging.info(
+                                f"Loaded {correction_type} corrections from {file_path} "
+                                "(applied bin-edge fix for non-monotonic edges)"
+                            )
+                            loaded = True
+                    if not loaded:
+                        logging.warning(f"Failed to load {correction_type} corrections: {e}")
 
     def get_pileup_weight(
         self,
@@ -55,37 +298,172 @@ class CorrectionManager:
         systematic: str = "central"
     ) -> ak.Array:
         """
-        Get pileup reweighting factors.
+        Get pileup reweighting factors using correctionlib.
 
-        Args:
-            events: Awkward Array of events
-            systematic: Systematic variation ("central", "up", "down")
-
-        Returns:
-            Array of pileup weights
+        Uses NanoAOD branch Pileup_nTrueInt and the first correction in the pileup
+        CorrectionSet (e.g. Collisions*_goldenJSON). Variation: "nominal" for central,
+        "up"/"down" if supported by the file.
         """
         if "pileup" not in self.corrections:
             logging.warning("Pileup corrections not available")
             return ak.ones_like(events.event, dtype=float)
 
         try:
-            # Get pileup multiplicity
-            pileup = events.Pileup.nTrueInt
+            # NanoAOD: flat branch Pileup_nTrueInt (number of true interactions)
+            pileup = getattr(events, "Pileup_nTrueInt", None)
+            if pileup is None:
+                pileup = events["Pileup_nTrueInt"] if "Pileup_nTrueInt" in events.fields else None
+            if pileup is None:
+                logging.warning("Pileup_nTrueInt not found in events, using unit weights")
+                return ak.ones_like(events.event, dtype=float)
 
-            # Apply correction (this is a placeholder - actual implementation would use correctionlib)
-            # The exact parameters depend on the correction file format
-            weights = ak.ones_like(pileup, dtype=float)
+            cs = self.corrections["pileup"]
+            # Use name from config (e.g. Collisions2022_355100_357900_eraBCD_GoldenJson) or first key
+            corr_name = self.config.get("corrections", {}).get("pileup_correction_name")
+            if not corr_name or corr_name not in cs:
+                corr_name = next(iter(cs.keys()), None)
+            if corr_name is None:
+                return ak.ones_like(pileup, dtype=float)
+            corr = cs[corr_name]
 
-            # TODO: Implement actual pileup correction using correctionlib
-            # Example:
-            # pileup_corr = self.corrections["pileup"]["pileup"]
-            # weights = pileup_corr.evaluate(pileup, systematic)
-
-            return weights
+            # Map "central" -> "nominal"; use "up"/"down" if correction supports it
+            variation = "nominal" if systematic == "central" else systematic
+            n_true_int = np.asarray(ak.to_numpy(pileup), dtype=float)
+            try:
+                weights = np.asarray(corr.evaluate(n_true_int, variation), dtype=float)
+                return ak.Array(weights)
+            except Exception:
+                # Fallback to nominal if up/down not supported
+                if variation != "nominal":
+                    try:
+                        weights = np.asarray(corr.evaluate(n_true_int, "nominal"), dtype=float)
+                        return ak.Array(weights)
+                    except Exception:
+                        pass
+                raise
 
         except Exception as e:
             logging.warning(f"Failed to apply pileup correction: {e}")
             return ak.ones_like(events.event, dtype=float)
+
+    def _evaluate_correction_jagged_or_flat(self, corr, count_ref: ak.Array, *eval_args) -> Optional[ak.Array]:
+        """
+        Coffea/correctionlib pattern: try evaluate with jagged arrays first, else flatten -> evaluate -> unflatten.
+        See: https://coffea-hep.readthedocs.io/en/latest/notebooks/applying_corrections.html
+        count_ref: array (e.g. objects.pt) used to get per-event counts for unflatten.
+        eval_args: arguments to corr.evaluate(*eval_args); can be jagged or scalars.
+        Returns result as ak.Array matching count_ref structure, or None on failure.
+        """
+        if corr is None:
+            return None
+        try:
+            result = corr.evaluate(*eval_args)
+            if isinstance(result, ak.Array):
+                return result
+        except Exception:
+            pass
+        try:
+            flat_args = []
+            for a in eval_args:
+                if isinstance(a, (ak.Array, np.ndarray)):
+                    flat_args.append(np.asarray(ak.ravel(a)))
+                else:
+                    flat_args.append(a)
+            result = np.asarray(corr.evaluate(*flat_args), dtype=float)
+            try:
+                counts = np.asarray(ak.num(count_ref, axis=1))
+            except Exception:
+                return ak.Array(result)
+            if len(counts) > 0 and int(counts.sum()) == len(result):
+                return ak.unflatten(result, counts)
+            return ak.Array(result)
+        except Exception:
+            return None
+
+    def _get_correction_by_name(self, cs_key: str, name_key: str, fallback_names: tuple = ()):
+        """Return correction from CorrectionSet by config name, or first key. Avoids 'in cs' which can raise."""
+        if cs_key not in self.corrections:
+            return None
+        cs = self.corrections[cs_key]
+        name = self.config.get("corrections", {}).get(name_key)
+        if name:
+            try:
+                return cs[name]
+            except (IndexError, KeyError, TypeError):
+                pass
+        for fb in fallback_names:
+            try:
+                return cs[fb]
+            except (IndexError, KeyError, TypeError):
+                continue
+        try:
+            keys = list(cs.keys()) if hasattr(cs, "keys") else []
+            if keys:
+                return cs[keys[0]]
+        except Exception:
+            pass
+        return None
+
+    def _get_muon_sf_highpt_correction(self):
+        """Muon SF for pt>30: muon_Z_ID with NUM_TightPFIso_DEN_TightID."""
+        return self._get_correction_by_name(
+            "muon_sf_highpt", "muon_sf_highpt_name",
+            fallback_names=("NUM_TightPFIso_DEN_TightID",)
+        )
+
+    def _get_muon_sf_lowpt_correction(self):
+        """Muon SF for pt<=30: muon_JPsi_LowpT with NUM_LooseID_DEN_TrackerMuons."""
+        return self._get_correction_by_name(
+            "muon_sf_lowpt", "muon_sf_lowpt_name",
+            fallback_names=("NUM_LooseID_DEN_TrackerMuons",)
+        )
+
+    def _evaluate_muon_sf_per_pt_bin(
+        self,
+        muons: ak.Array,
+        corr_highpt,
+        corr_lowpt,
+        systematic: str = "central",
+    ) -> Optional[ak.Array]:
+        """
+        Evaluate muon SF: pt>30 use highpt correction, pt<=30 use lowpt.
+        Muon SFs are pt and |eta| dependent; inputs passed as (abseta, pt) or (pt, abseta).
+        Returns jagged array of SFs or None on failure.
+        """
+        flat_pt = np.asarray(ak.ravel(muons.pt), dtype=float)
+        flat_abseta = np.asarray(np.abs(ak.ravel(muons.eta)), dtype=float)
+        n_flat = len(flat_pt)
+        if n_flat == 0:
+            return ak.ones_like(muons.pt, dtype=float)
+        result = np.ones(n_flat, dtype=float)
+        mask_high = flat_pt > 30.0
+        mask_low = ~mask_high
+        for corr, mask, label in [(corr_highpt, mask_high, "highpt"), (corr_lowpt, mask_low, "lowpt")]:
+            if corr is None or not np.any(mask):
+                continue
+            pt_sel = flat_pt[mask]
+            eta_sel = flat_abseta[mask]
+            # Try (abseta, pt) and (pt, abseta) orderings; optional systematic
+            for args in [
+                (eta_sel, pt_sel),
+                (pt_sel, eta_sel),
+                (eta_sel, pt_sel, systematic),
+                (pt_sel, eta_sel, systematic),
+                (systematic, eta_sel, pt_sel),
+                (systematic, pt_sel, eta_sel),
+            ]:
+                try:
+                    sf = np.asarray(corr.evaluate(*args), dtype=float)
+                    if sf.shape == pt_sel.shape:
+                        result[mask] = sf
+                        break
+                except Exception:
+                    continue
+        try:
+            counts = np.asarray(ak.num(muons.pt, axis=1))
+            return ak.unflatten(result, counts)
+        except Exception:
+            return ak.Array(result)
 
     def get_muon_sf(
         self,
@@ -93,38 +471,61 @@ class CorrectionManager:
         systematic: str = "central"
     ) -> ak.Array:
         """
-        Get muon scale factors for ID and isolation.
-
-        Args:
-            muons: Selected muons
-            systematic: Systematic variation ("central", "up", "down")
-
-        Returns:
-            Array of muon scale factors
+        Get muon scale factors: pt>30 use muon_Z_ID NUM_TightPFIso_DEN_TightID,
+        pt<=30 use muon_JPsi_LowpT NUM_LooseID_DEN_TrackerMuons.
         """
-        if "muonSF" not in self.corrections:
-            logging.warning("Muon scale factors not available")
-            return ak.ones_like(muons.pt, dtype=float)
+        ones = ak.ones_like(muons.pt, dtype=float)
+        if not muons.pt.layout or len(ak.ravel(muons.pt)) == 0:
+            return ones
+        corr_highpt = self._get_muon_sf_highpt_correction()
+        corr_lowpt = self._get_muon_sf_lowpt_correction()
+        if corr_highpt is None and corr_lowpt is None:
+            return ones
+        out = self._evaluate_muon_sf_per_pt_bin(muons, corr_highpt, corr_lowpt, systematic)
+        if out is not None:
+            return out
+        logging.warning("Muon SF evaluate failed for all tried signatures")
+        return ones
 
-        try:
-            # Get muon properties
-            pt = muons.pt
-            eta = abs(muons.eta)
+    def get_muon_sf_nominal_up_down(self, muons: ak.Array) -> Dict[str, ak.Array]:
+        """Get muon SF as central, up, down (pt>30 highpt, pt<=30 lowpt)."""
+        ones = ak.ones_like(muons.pt, dtype=float)
+        out = {"central": ones, "up": ones, "down": ones}
+        corr_highpt = self._get_muon_sf_highpt_correction()
+        corr_lowpt = self._get_muon_sf_lowpt_correction()
+        if corr_highpt is None and corr_lowpt is None:
+            return out
+        for key, syst in [("central", "central"), ("up", "up"), ("down", "down")]:
+            val = self._evaluate_muon_sf_per_pt_bin(muons, corr_highpt, corr_lowpt, syst)
+            if val is not None:
+                out[key] = val
+        return out
 
-            # Apply correction (this is a placeholder - actual implementation would use correctionlib)
-            # The exact parameters depend on the correction file format
-            weights = ak.ones_like(pt, dtype=float)
+    def _get_electron_sf_correction(self):
+        """Return the Electron-ID-SF correction evaluator from the loaded CorrectionSet."""
+        if "electronSF" not in self.corrections:
+            return None
+        cs = self.corrections["electronSF"]
+        for name in ("Electron-ID-SF", "electron_id_reco", "electron"):
+            if name in cs:
+                return cs[name]
+        if hasattr(cs, "keys"):
+            first = next(iter(cs.keys()), None)
+            if first is not None:
+                return cs[first]
+        return None
 
-            # TODO: Implement actual muon SF using correctionlib
-            # Example:
-            # muon_corr = self.corrections["muonSF"]["muon_id_iso"]
-            # weights = muon_corr.evaluate(eta, pt, systematic)
-
-            return weights
-
-        except Exception as e:
-            logging.warning(f"Failed to apply muon scale factors: {e}")
-            return ak.ones_like(muons.pt, dtype=float)
+    def _electron_sf_params(self) -> tuple:
+        """Return (year_str, working_point) from config for Electron-ID-SF."""
+        year = self.config.get("year", 2022)
+        corr_cfg = self.config.get("corrections", {})
+        year_str = corr_cfg.get("electron_sf_year") or {
+            2022: "2022Re-recoBCD",
+            2023: "2022Re-recoBCD",
+            2024: "2022Re-recoBCD",
+        }.get(year, "2022Re-recoBCD")
+        working_point = corr_cfg.get("electron_sf_working_point", "Tight")
+        return str(year_str), str(working_point)
 
     def get_electron_sf(
         self,
@@ -132,38 +533,93 @@ class CorrectionManager:
         systematic: str = "central"
     ) -> ak.Array:
         """
-        Get electron scale factors for ID and reconstruction.
-
-        Args:
-            electrons: Selected electrons
-            systematic: Systematic variation ("central", "up", "down")
-
-        Returns:
-            Array of electron scale factors
+        Get electron scale factors for ID and reconstruction (nominal, up, or down).
+        Uses correction \"Electron-ID-SF\" with ValType sf / sfup / sfdown.
         """
-        if "electronSF" not in self.corrections:
-            logging.warning("Electron scale factors not available")
-            return ak.ones_like(electrons.pt, dtype=float)
+        var = self.get_electron_sf_nominal_up_down(electrons)
+        if systematic == "up":
+            return var["up"]
+        if systematic == "down":
+            return var["down"]
+        return var["central"]
 
+    def get_electron_sf_nominal_up_down(
+        self,
+        electrons: ak.Array,
+    ) -> Dict[str, ak.Array]:
+        """
+        Get electron scale factors as nominal, up, and down for systematics.
+        Uses shared jagged-then-flat pattern (Coffea/correctionlib).
+        Returns dict with keys \"central\", \"up\", \"down\" (same shape as electrons.pt).
+        """
+        ones = ak.ones_like(electrons.pt, dtype=float)
+        out = {"central": ones, "up": ones, "down": ones}
+        corr = self._get_electron_sf_correction()
+        if corr is None:
+            return out
+        year_str, working_point = self._electron_sf_params()
+        pt = electrons.pt
+        eta = electrons.eta
+        if len(ak.ravel(pt)) == 0:
+            return out
+        for val_type, key in [("sf", "central"), ("sfup", "up"), ("sfdown", "down")]:
+            val = self._evaluate_correction_jagged_or_flat(
+                corr, pt, year_str, val_type, working_point, eta, pt
+            )
+            out[key] = val if val is not None else ones
+        return out
+
+    def _get_btag_sf_correction(self):
+        """Return the b-tag SF correction (deepJet_shape). Safe lookup, no 'in cs'."""
+        if "btagSF" not in self.corrections:
+            return None
+        cs = self.corrections["btagSF"]
+        for name in ("deepJet_shape", "btagSF", "btag_sf", "BTV"):
+            try:
+                return cs[name]
+            except (IndexError, KeyError, TypeError):
+                continue
         try:
-            # Get electron properties
-            pt = electrons.pt
-            eta = abs(electrons.eta)
+            keys = list(cs.keys()) if hasattr(cs, "keys") else []
+            if keys:
+                return cs[keys[0]]
+        except Exception:
+            pass
+        return None
 
-            # Apply correction (this is a placeholder - actual implementation would use correctionlib)
-            # The exact parameters depend on the correction file format
-            weights = ak.ones_like(pt, dtype=float)
-
-            # TODO: Implement actual electron SF using correctionlib
-            # Example:
-            # ele_corr = self.corrections["electronSF"]["electron_id_reco"]
-            # weights = ele_corr.evaluate(eta, pt, systematic)
-
-            return weights
-
-        except Exception as e:
-            logging.warning(f"Failed to apply electron scale factors: {e}")
-            return ak.ones_like(electrons.pt, dtype=float)
+    def _evaluate_btag_sf(
+        self,
+        jets: ak.Array,
+        corr,
+        systematic: str,
+    ) -> Optional[ak.Array]:
+        """
+        B-tag shape SF: evaluate(systematic, flavor, eta, pt, discriminator).
+        Flavor: 0=udsg, 4=c, 5=b (hadronFlavour). Returns jagged SF array or None.
+        """
+        if corr is None:
+            return None
+        flavor = getattr(jets, "hadronFlavour", None)
+        if flavor is None:
+            flavor = ak.zeros_like(jets.pt, dtype=np.int32)
+        eta = np.asarray(ak.ravel(np.abs(jets.eta)), dtype=float)
+        pt = np.asarray(ak.ravel(jets.pt), dtype=float)
+        discr = np.asarray(ak.ravel(jets.btagDeepFlavB), dtype=float)
+        flavor_flat = np.asarray(ak.ravel(flavor), dtype=np.int32)
+        n = len(pt)
+        if n == 0:
+            return ak.ones_like(jets.pt, dtype=float)
+        try:
+            sf = np.asarray(
+                corr.evaluate(systematic, flavor_flat, eta, pt, discr),
+                dtype=float,
+            )
+            if sf.shape != (n,):
+                return None
+            counts = np.asarray(ak.num(jets.pt, axis=1))
+            return ak.unflatten(ak.Array(sf), counts)
+        except Exception:
+            return None
 
     def get_btag_sf(
         self,
@@ -171,71 +627,98 @@ class CorrectionManager:
         systematic: str = "central"
     ) -> ak.Array:
         """
-        Get b-tagging scale factors for jets.
-
-        Args:
-            jets: Selected jets
-            systematic: Systematic variation ("central", "up", "down")
-
-        Returns:
-            Array of b-tagging scale factors
+        Get b-tagging scale factors (deepJet_shape): evaluate(systematic, flavor, eta, pt, discriminator).
+        Central/up/down via systematic string.
         """
-        if "btagSF" not in self.corrections:
-            logging.warning("B-tagging scale factors not available")
-            return ak.ones_like(jets.pt, dtype=float)
+        ones = ak.ones_like(jets.pt, dtype=float)
+        if not jets.pt.layout or len(ak.ravel(jets.pt)) == 0:
+            return ones
+        corr = self._get_btag_sf_correction()
+        out = self._evaluate_btag_sf(jets, corr, systematic)
+        if out is not None:
+            return out
+        logging.warning("B-tag SF evaluate failed")
+        return ones
 
+    def get_btag_sf_nominal_up_down(self, jets: ak.Array) -> Dict[str, ak.Array]:
+        """Get b-tag SF as central, up, down (deepJet_shape systematics)."""
+        ones = ak.ones_like(jets.pt, dtype=float)
+        out = {"central": ones, "up": ones, "down": ones}
+        corr = self._get_btag_sf_correction()
+        if corr is None:
+            return out
+        for key, syst in [("central", "central"), ("up", "up"), ("down", "down")]:
+            val = self._evaluate_btag_sf(jets, corr, syst)
+            if val is not None:
+                out[key] = val
+        return out
+
+    def _per_event_product(self, jagged_sf: ak.Array) -> ak.Array:
+        """
+        Reduce per-object scale factors to per-event: product over objects in each event.
+        Events with no objects get 1.0 so they do not change the total weight.
+        """
         try:
-            # Get jet properties
-            pt = jets.pt
-            eta = abs(jets.eta)
-            flavor = jets.hadronFlavour  # 5=b, 4=c, 0=light
-
-            # Apply correction (this is a placeholder - actual implementation would use correctionlib)
-            # The exact parameters depend on the correction file format
-            weights = ak.ones_like(pt, dtype=float)
-
-            # TODO: Implement actual b-tagging SF using correctionlib
-            # Example:
-            # btag_corr = self.corrections["btagSF"]["btag"]
-            # weights = btag_corr.evaluate(flavor, eta, pt, systematic)
-
-            return weights
-
-        except Exception as e:
-            logging.warning(f"Failed to apply b-tagging scale factors: {e}")
-            return ak.ones_like(jets.pt, dtype=float)
+            prod = ak.prod(jagged_sf, axis=1)
+            return ak.fill_none(prod, 1.0)
+        except Exception:
+            n_events = len(jagged_sf)
+            return np.ones(n_events, dtype=float)
 
     def get_all_corrections(
         self,
         events: ak.Array,
         objects: Dict[str, Any],
         systematic: str = "central"
-    ) -> Dict[str, ak.Array]:
+    ) -> Dict[str, Union[ak.Array, Dict[str, ak.Array]]]:
         """
         Get all corrections for an event sample.
 
-        Args:
-            events: Awkward Array of events
-            objects: Dictionary containing selected objects
-            systematic: Systematic variation
+        Each weight is the product over all selected objects in the event:
+        - weight_btag: product of b-tag SF over all jets
+        - weight_electron_id: product of electron ID SF over all electrons
+        - weight_muon_id: product of muon ID (and iso if combined) SF over all muons
+        Final event weight = pileup * generator * weight_muon_id * weight_electron_id * weight_btag * ...
 
         Returns:
-            Dictionary containing all correction weights
+            Dictionary of per-event weights. Values are either a single array (e.g. pileup)
+            or a dict {"central", "up", "down"} so the weight calculator can combine
+            central only for total weight and use up/down for systematics.
         """
         corrections = {}
 
-        # Pileup weights
+        # Pileup (per-event, no systematic variations stored here)
         corrections["pileup"] = self.get_pileup_weight(events, systematic)
 
-        # Object scale factors
-        if "muons" in objects and len(ak.flatten(objects["muons"])) > 0:
-            corrections["muon_sf"] = self.get_muon_sf(objects["muons"], systematic)
+        # Muon: product of SF over all muons -> weight_muon_id (ID/iso as in correction file)
+        if "tight_muons_pt30" in objects and len(ak.flatten(objects["tight_muons_pt30"])) > 0:
+            mu_sf = self.get_muon_sf(objects["tight_muons_pt30"], systematic)
+            mu_var = self.get_muon_sf_nominal_up_down(objects["tight_muons_pt30"])
+            corrections["weight_muon_id"] = {
+                "central": self._per_event_product(mu_sf),
+                "up": self._per_event_product(mu_var["up"]),
+                "down": self._per_event_product(mu_var["down"]),
+            }
 
-        if "electrons" in objects and len(ak.flatten(objects["electrons"])) > 0:
-            corrections["electron_sf"] = self.get_electron_sf(objects["electrons"], systematic)
+        # Electron: product of SF over all electrons -> weight_electron_id
+        if "tight_electrons_pt30" in objects and len(ak.flatten(objects["tight_electrons_pt30"])) > 0:
+            ele_sf = self.get_electron_sf(objects["tight_electrons_pt30"], systematic)
+            ele_var = self.get_electron_sf_nominal_up_down(objects["tight_electrons_pt30"])
+            corrections["weight_electron_id"] = {
+                "central": self._per_event_product(ele_sf),
+                "up": self._per_event_product(ele_var["up"]),
+                "down": self._per_event_product(ele_var["down"]),
+            }
 
+        # B-tag: product of SF over all jets -> weight_btag
         if "jets" in objects and len(ak.flatten(objects["jets"])) > 0:
-            corrections["btag_sf"] = self.get_btag_sf(objects["jets"], systematic)
+            btag_sf = self.get_btag_sf(objects["jets"], systematic)
+            btag_var = self.get_btag_sf_nominal_up_down(objects["jets"])
+            corrections["weight_btag"] = {
+                "central": self._per_event_product(btag_sf),
+                "up": self._per_event_product(btag_var["up"]),
+                "down": self._per_event_product(btag_var["down"]),
+            }
 
         return corrections
 

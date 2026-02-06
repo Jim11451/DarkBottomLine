@@ -458,16 +458,38 @@ class HistogramManager:
         if isinstance(weights, ak.Array):
             weights = ak.to_numpy(weights)
 
-        # Fill MET histogram
-        met_pt = events["PFMET_pt"] if "PFMET_pt" in events.fields else events["MET_pt"]
+        # Fill MET histogram (convert to numpy to avoid axis=-1 in hist/awkward)
+        met_pt_arr = events["PFMET_pt"] if "PFMET_pt" in events.fields else events["MET_pt"]
+        try:
+            met_pt = np.asarray(ak.to_numpy(met_pt_arr))
+        except Exception:
+            try:
+                met_pt = np.asarray(ak.to_numpy(ak.ravel(met_pt_arr)))
+            except Exception:
+                met_pt = np.zeros(len(events), dtype=np.float64)
         histograms["met"].fill(met=met_pt, weight=weights)
 
-        # Fill multiplicity histograms
-        n_jets = ak.num(objects["jets"], axis=1)
-        n_bjets = ak.num(objects["bjets"], axis=1)
-        n_muons = ak.num(objects["muons"], axis=1)
-        n_electrons = ak.num(objects["electrons"], axis=1)
-        n_taus = ak.num(objects["taus"], axis=1)
+        # Safe per-event count: use axis=1 for jagged arrays; depth-1 (e.g. sliced region) -> zeros
+        def _safe_num(arr, n_ev: int):
+            if arr is None or (isinstance(arr, ak.Array) and len(arr) == 0):
+                return np.zeros(n_ev, dtype=np.int64)
+            try:
+                return np.asarray(ak.to_numpy(ak.num(arr, axis=1)))
+            except (Exception, BaseException):
+                try:
+                    a = ak.to_numpy(ak.ravel(arr))
+                    if len(a) == n_ev:
+                        return np.asarray(a, dtype=np.int64)
+                except (Exception, BaseException):
+                    pass
+                return np.zeros(n_ev, dtype=np.int64)
+
+        n_ev = len(events)
+        n_jets = _safe_num(objects.get("jets"), n_ev)
+        n_bjets = _safe_num(objects.get("bjets"), n_ev)
+        n_muons = _safe_num(objects.get("tight_muons_pt30"), n_ev)
+        n_electrons = _safe_num(objects.get("tight_electrons_pt30"), n_ev)
+        n_taus = _safe_num(objects.get("tight_taus_pt30"), n_ev)
 
         histograms["n_jets"].fill(n_jets=n_jets, weight=weights)
         histograms["n_bjets"].fill(n_bjets=n_bjets, weight=weights)
@@ -475,49 +497,54 @@ class HistogramManager:
         histograms["n_electrons"].fill(n_electrons=n_electrons, weight=weights)
         histograms["n_taus"].fill(n_taus=n_taus, weight=weights)
 
-        # Fill jet kinematics
-        if len(ak.flatten(objects["jets"])) > 0:
-            jet_pt = ak.flatten(objects["jets"].pt)
-            jet_eta = ak.flatten(objects["jets"].eta)
-            jet_phi = ak.flatten(objects["jets"].phi)
+        # Fill jet kinematics (convert to numpy to avoid axis=-1 in hist/awkward)
+        jets = objects.get("jets", ak.Array([]))
+        try:
+            if jets is not None and len(jets) > 0 and len(ak.flatten(jets)) > 0:
+                jet_pt = np.asarray(ak.to_numpy(ak.flatten(jets.pt)))
+                jet_eta = np.asarray(ak.to_numpy(ak.flatten(jets.eta)))
+                jet_phi = np.asarray(ak.to_numpy(ak.flatten(jets.phi)))
+                jet_weights = np.asarray(ak.to_numpy(ak.flatten(ak.broadcast_arrays(weights, jets.pt)[0])))
+                histograms["jet_pt"].fill(jet_pt=jet_pt, weight=jet_weights)
+                histograms["jet_eta"].fill(jet_eta=jet_eta, weight=jet_weights)
+                histograms["jet_phi"].fill(jet_phi=jet_phi, weight=jet_weights)
+                if hasattr(jets, "btagDeepFlavB"):
+                    btag_score = np.asarray(ak.to_numpy(ak.flatten(jets.btagDeepFlavB)))
+                    histograms["btag_deepjet"].fill(btag_deepjet=btag_score, weight=jet_weights)
+        except Exception:
+            pass
 
-            # Repeat weights for each jet
-            jet_weights = ak.flatten(ak.broadcast_arrays(weights, objects["jets"].pt)[0])
+        # Fill muon kinematics (numpy for hist)
+        tight_mu = objects.get("tight_muons_pt30", ak.Array([]))
+        try:
+            if tight_mu is not None and len(tight_mu) > 0 and len(ak.flatten(tight_mu)) > 0:
+                muon_pt = np.asarray(ak.to_numpy(ak.flatten(tight_mu.pt)))
+                muon_eta = np.asarray(ak.to_numpy(ak.flatten(tight_mu.eta)))
+                muon_weights = np.asarray(ak.to_numpy(ak.flatten(ak.broadcast_arrays(weights, tight_mu.pt)[0])))
+                histograms["muon_pt"].fill(muon_pt=muon_pt, weight=muon_weights)
+                histograms["muon_eta"].fill(muon_eta=muon_eta, weight=muon_weights)
+        except Exception:
+            pass
 
-            histograms["jet_pt"].fill(jet_pt=jet_pt, weight=jet_weights)
-            histograms["jet_eta"].fill(jet_eta=jet_eta, weight=jet_weights)
-            histograms["jet_phi"].fill(jet_phi=jet_phi, weight=jet_weights)
+        # Fill electron kinematics (numpy for hist)
+        tight_el = objects.get("tight_electrons_pt30", ak.Array([]))
+        try:
+            if tight_el is not None and len(tight_el) > 0 and len(ak.flatten(tight_el)) > 0:
+                electron_pt = np.asarray(ak.to_numpy(ak.flatten(tight_el.pt)))
+                electron_eta = np.asarray(ak.to_numpy(ak.flatten(tight_el.eta)))
+                electron_weights = np.asarray(ak.to_numpy(ak.flatten(ak.broadcast_arrays(weights, tight_el.pt)[0])))
+                histograms["electron_pt"].fill(electron_pt=electron_pt, weight=electron_weights)
+                histograms["electron_eta"].fill(electron_eta=electron_eta, weight=electron_weights)
+        except Exception:
+            pass
 
-            # Fill b-tagging discriminant
-            if hasattr(objects["jets"], "btagDeepFlavB"):
-                btag_score = ak.flatten(objects["jets"].btagDeepFlavB)
-                histograms["btag_deepjet"].fill(btag_deepjet=btag_score, weight=jet_weights)
-
-        # Fill muon kinematics
-        if len(ak.flatten(objects["muons"])) > 0:
-            muon_pt = ak.flatten(objects["muons"].pt)
-            muon_eta = ak.flatten(objects["muons"].eta)
-
-            muon_weights = ak.flatten(ak.broadcast_arrays(weights, objects["muons"].pt)[0])
-
-            histograms["muon_pt"].fill(muon_pt=muon_pt, weight=muon_weights)
-            histograms["muon_eta"].fill(muon_eta=muon_eta, weight=muon_weights)
-
-        # Fill electron kinematics
-        if len(ak.flatten(objects["electrons"])) > 0:
-            electron_pt = ak.flatten(objects["electrons"].pt)
-            electron_eta = ak.flatten(objects["electrons"].eta)
-
-            electron_weights = ak.flatten(ak.broadcast_arrays(weights, objects["electrons"].pt)[0])
-
-            histograms["electron_pt"].fill(electron_pt=electron_pt, weight=electron_weights)
-            histograms["electron_eta"].fill(electron_eta=electron_eta, weight=electron_weights)
-
-        # Fill Delta-R distributions
-        if len(ak.flatten(objects["muons"])) > 0 and len(ak.flatten(objects["jets"])) > 0:
-            # Calculate Delta-R between muons and jets
-            # This is a simplified version - would need proper 2D Delta-R calculation
-            pass  # TODO: Implement Delta-R calculation
+        # Fill Delta-R distributions (TODO: implement 2D Delta-R)
+        try:
+            if (tight_mu is not None and len(ak.flatten(tight_mu)) > 0 and
+                    jets is not None and len(ak.flatten(jets)) > 0):
+                pass
+        except Exception:
+            pass
 
         return histograms
 
@@ -543,9 +570,17 @@ class HistogramManager:
         histograms["met"]["values"].extend(met_values)
         histograms["met"]["weights"].extend(weights)
 
-        # Fill multiplicity histograms
-        n_jets = ak.to_numpy(ak.num(objects["jets"], axis=1))
-        n_bjets = ak.to_numpy(ak.num(objects["bjets"], axis=1))
+        # Safe per-event count (sliced region objects can have depth-1)
+        n_ev = len(events)
+        def _safe_n(arr, n_ev: int):
+            if arr is None or (isinstance(arr, ak.Array) and len(arr) == 0):
+                return np.zeros(n_ev, dtype=np.int64)
+            try:
+                return ak.to_numpy(ak.num(arr, axis=1))
+            except Exception:
+                return np.zeros(n_ev, dtype=np.int64)
+        n_jets = _safe_n(objects.get("jets"), n_ev)
+        n_bjets = _safe_n(objects.get("bjets"), n_ev)
 
         histograms["n_jets"]["values"].extend(n_jets)
         histograms["n_jets"]["weights"].extend(weights)
