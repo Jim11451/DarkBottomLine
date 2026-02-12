@@ -167,7 +167,7 @@ class DarkBottomLineAnalyzer:
         if event_selection_output:
             try:
                 logging.info(f"Saving preselected events to {event_selection_output} ({len(events)} events)")
-                self.base_processor._save_event_selection(event_selection_output, events, objects)
+                self.base_processor._save_event_selection(event_selection_output, events, objects, max_events=self.base_processor.config.get("max_events"))
                 import os
                 if os.path.exists(event_selection_output):
                     file_size = os.path.getsize(event_selection_output)
@@ -891,7 +891,7 @@ if COFFEA_AVAILABLE:
                         # Save using base processor helper
                         logging.info(f"Saving accumulated event-level selection to {self.event_selection_output}")
                         self.analyzer.base_processor._save_event_selection(
-                            self.event_selection_output, all_selected_events, all_selected_objects
+                            self.event_selection_output, all_selected_events, all_selected_objects, max_events=self.config.get("max_events")
                         )
                         # Verify file was created
                         if os.path.exists(self.event_selection_output):

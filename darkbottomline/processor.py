@@ -142,7 +142,7 @@ class DarkBottomLineProcessor:
         if event_selection_output:
             try:
                 logging.info(f"Saving event-level selection to {event_selection_output} ({len(selected_events)} events)")
-                self._save_event_selection(event_selection_output, selected_events, selected_objects)
+                self._save_event_selection(event_selection_output, selected_events, selected_objects, max_events=self.config.get("max_events"))
                 # Verify file was created
                 import os
                 if os.path.exists(event_selection_output):
@@ -273,7 +273,7 @@ class DarkBottomLineProcessor:
 
         return skimmed
 
-    def _save_event_selection(self, output_file: str, events: ak.Array, objects: Dict[str, Any]):
+    def _save_event_selection(self, output_file: str, events: ak.Array, objects: Dict[str, Any], max_events: Optional[int] = None):
         """
         Save selected events and corresponding objects to a file.
 
@@ -295,6 +295,8 @@ class DarkBottomLineProcessor:
 
         # Build serializable dict
         serializable = {}
+        if max_events is not None:
+            serializable["total_event"] = max_events
         try:
             # Convert events (awkward array) to list-of-records where possible
             try:
