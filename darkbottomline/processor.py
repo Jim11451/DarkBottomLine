@@ -273,11 +273,19 @@ class DarkBottomLineProcessor:
 
         return skimmed
 
-    def _save_event_selection(self, output_file: str, events: ak.Array, objects: Dict[str, Any], max_events: Optional[int] = None):
+    def _save_event_selection(self, output_file: str, events: ak.Array, objects: Dict[str, Any], 
+                              max_events: Optional[int] = None, n_events_total: Optional[int] = None):
         """
         Save selected events and corresponding objects to a file.
 
         Currently saves as a pickle unless a different format is implemented.
+        
+        Args:
+            output_file: Path to save the output file
+            events: Selected events (after event-level selection)
+            objects: Selected objects (after event-level selection)
+            max_events: Maximum events parameter from config (optional)
+            n_events_total: Total number of events BEFORE selection (optional)
         """
         import os
         import pickle
@@ -295,8 +303,15 @@ class DarkBottomLineProcessor:
 
         # Build serializable dict
         serializable = {}
+        
+        # Add n_events: total events before selection
+        if n_events_total is not None:
+            serializable["n_events"] = n_events_total
+        
+        # Keep max_events for backward compatibility
         if max_events is not None:
             serializable["total_event"] = max_events
+            
         try:
             # Convert events (awkward array) to list-of-records where possible
             try:
@@ -413,6 +428,15 @@ class DarkBottomLineProcessor:
 
             with uproot.recreate(root_file) as f:
                 f['Events'] = branches
+
+                # Add metadata tree with n_events (total events before selection)
+                if n_events_total is not None:
+                    metadata_dict = {
+                        'n_events': np.array([n_events_total], dtype=np.int64),
+                        'n_selected_events': np.array([len(events)], dtype=np.int64),
+                    }
+                    f['Metadata'] = metadata_dict
+                    logging.info(f"Added n_events={n_events_total} to ROOT file metadata")
 
             # Verify file was created
             if os.path.exists(root_file):

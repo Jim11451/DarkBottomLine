@@ -130,7 +130,8 @@ class DarkBottomLineAnalyzer:
                 "weights": []
             }
 
-    def process(self, events: ak.Array, event_selection_output: Optional[str] = None) -> Dict[str, Any]:
+    def process(self, events: ak.Array, event_selection_output: Optional[str] = None,
+                n_events_total: Optional[int] = None) -> Dict[str, Any]:
         """
         Process events through all regions.
 
@@ -140,6 +141,7 @@ class DarkBottomLineAnalyzer:
         Args:
             events: Awkward Array of events
             event_selection_output: If set, save preselected events to this path
+            n_events_total: Total number of events before selection (from input files)
 
         Returns:
             Analysis results with per-region histograms
@@ -167,7 +169,11 @@ class DarkBottomLineAnalyzer:
         if event_selection_output:
             try:
                 logging.info(f"Saving preselected events to {event_selection_output} ({len(events)} events)")
-                self.base_processor._save_event_selection(event_selection_output, events, objects, max_events=self.base_processor.config.get("max_events"))
+                self.base_processor._save_event_selection(
+                    event_selection_output, events, objects, 
+                    max_events=self.base_processor.config.get("max_events"),
+                    n_events_total=n_events_total
+                )
                 import os
                 if os.path.exists(event_selection_output):
                     file_size = os.path.getsize(event_selection_output)
@@ -666,10 +672,13 @@ if COFFEA_AVAILABLE:
         Coffea-compatible processor wrapper for multi-region analyzer.
         """
 
-        def __init__(self, config: Dict[str, Any], regions_config_path: str, event_selection_output: Optional[str] = None):
+        def __init__(self, config: Dict[str, Any], regions_config_path: str, 
+                     event_selection_output: Optional[str] = None,
+                     n_events_total: Optional[int] = None):
             self.config = config
             self.regions_config_path = regions_config_path
             self.event_selection_output = event_selection_output
+            self.n_events_total = n_events_total  # Total events before selection
             self.analyzer = DarkBottomLineAnalyzer(config, regions_config_path)
             # Initialize accumulator for Coffea
             self.accumulator = processor.dict_accumulator({
@@ -891,7 +900,9 @@ if COFFEA_AVAILABLE:
                         # Save using base processor helper
                         logging.info(f"Saving accumulated event-level selection to {self.event_selection_output}")
                         self.analyzer.base_processor._save_event_selection(
-                            self.event_selection_output, all_selected_events, all_selected_objects, max_events=self.config.get("max_events")
+                            self.event_selection_output, all_selected_events, all_selected_objects, 
+                            max_events=self.config.get("max_events"),
+                            n_events_total=self.n_events_total
                         )
                         # Verify file was created
                         if os.path.exists(self.event_selection_output):
