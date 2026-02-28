@@ -181,14 +181,21 @@ def run_analyzer(args):
         input_files = _get_input_files(args.input)
 
         # Count total events from input files (BEFORE any selection)
+        # If --max-events is specified, use that; otherwise count file size
         n_events_total = None
         if args.event_selection_output:
             try:
-                logging.info("Counting total events from input files...")
-                n_events_total = count_total_events(input_files, tree_name="Events")
-                logging.info(f"Total events in input files (before selection): {n_events_total}")
+                if args.max_events:
+                    # Use max_events limit as the total events to process
+                    n_events_total = args.max_events
+                    logging.info(f"n_events set to --max-events limit: {n_events_total}")
+                else:
+                    # Count total events in input files
+                    logging.info("Counting total events from input files...")
+                    n_events_total = count_total_events(input_files, tree_name="Events")
+                    logging.info(f"Total events in input files (before selection): {n_events_total}")
             except Exception as e:
-                logging.warning(f"Failed to count total events: {e}. Will skip n_events in output.")
+                logging.warning(f"Failed to determine n_events: {e}. Will skip n_events in output.")
                 n_events_total = None
 
         # Parse chunk size argument (can be "auto" or int)
