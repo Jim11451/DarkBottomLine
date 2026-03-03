@@ -715,12 +715,15 @@ if COFFEA_AVAILABLE:
                      event_selection_output: Optional[str] = None,
                      n_events_total: Optional[int] = None,
                      event_selection_only: bool = False,
-                     output_format: Optional[str] = None):
+                     output_format: Optional[str] = None,
+                     max_events: Optional[int] = None):
             self.config = config
             self.regions_config_path = regions_config_path
             self.event_selection_output = event_selection_output
             self.n_events_total = n_events_total  # Total events before selection
             self.event_selection_only = event_selection_only
+            self.max_events = max_events  # Maximum events to process
+            self.processed_events = 0  # Track number of events processed
             # Auto-detect output_format from event_selection_output extension if not specified
             if output_format is None and event_selection_output:
                 if event_selection_output.endswith('.root'):
@@ -756,8 +759,46 @@ if COFFEA_AVAILABLE:
 
         def process(self, events: ak.Array) -> Dict[str, Any]:
             """Process events using the analyzer."""
+            metadata = getattr(events, "metadata", {}) if events is not None else {}
+            events_to_process = events
+
+            if self.max_events is not None and isinstance(metadata, dict):
+                entry_start = metadata.get("entrystart")
+                entry_stop = metadata.get("entrystop")
+                if isinstance(entry_start, int) and isinstance(entry_stop, int):
+                    if entry_start >= self.max_events:
+                        logging.info(
+                            f"Skipping chunk [{entry_start}, {entry_stop}) due to max-events={self.max_events}"
+                        )
+                        return self.accumulator
+                    if entry_stop > self.max_events:
+                        keep_events = self.max_events - entry_start
+                        if keep_events <= 0:
+                            logging.info(
+                                f"Skipping chunk [{entry_start}, {entry_stop}) due to max-events={self.max_events}"
+                            )
+                            return self.accumulator
+                        events_to_process = events[:keep_events]
+                        logging.info(
+                            f"Trimming chunk [{entry_start}, {entry_stop}) to {keep_events} events for max-events={self.max_events}"
+                        )
+
+            # Fallback path for executors/chunks without metadata
+            if self.max_events is not None:
+                events_remaining = self.max_events - self.processed_events
+                if events_remaining <= 0:
+                    logging.info(f"Skipping chunk: already processed {self.processed_events}/{self.max_events} max events")
+                    return self.accumulator
+                if len(events_to_process) > events_remaining:
+                    events_to_process = events_to_process[:events_remaining]
+                    logging.info(f"Limiting chunk to {len(events_to_process)} events (max_events={self.max_events}, already processed={self.processed_events})")
+            
+            # Track processed events
+            self.processed_events += len(events_to_process)
+            logging.info(f"Processing {len(events_to_process)} events (total processed: {self.processed_events}/{self.max_events if self.max_events else 'unlimited'})")
+            
             # When event_selection_only is true, pass it to analyzer to skip region analysis
-            result = self.analyzer.process(events, event_selection_output=None, 
+            result = self.analyzer.process(events_to_process, event_selection_output=None, 
                                           event_selection_only=self.event_selection_only,
                                           output_format=self.output_format)
 
@@ -767,15 +808,15 @@ if COFFEA_AVAILABLE:
                     import os
                     import pickle
                     import awkward as ak
-                    logging.info(f"Collecting selected events for event_selection_output from chunk ({len(events)} events)")
+                    logging.info(f"Collecting selected events for event_selection_output from chunk ({len(events_to_process)} events)")
                     from .selections import apply_selection
                     from .objects import build_objects
                     # Apply event-level selection to get selected events
-                    objects = build_objects(events, self.config)
+                    objects = build_objects(events_to_process, self.config)
                     selected_events, selected_objects, _ = apply_selection(
-                        events, objects, self.config
+                        events_to_process, objects, self.config
                     )
-                    logging.info(f"Chunk: {len(selected_events)}/{len(events)} events passed selection")
+                    logging.info(f"Chunk: {len(selected_events)}/{len(events_to_process)} events passed selection")
 
                     # Save this chunk to a temporary file (for cross-worker compatibility)
                     # Use unique filename to avoid conflicts across workers

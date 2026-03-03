@@ -241,8 +241,11 @@ def run_analyzer(args):
             fileset = {"dataset": input_files}
             chunksize = chunk_size
             maxchunks = None
-            if args.max_events:
-                maxchunks = (args.max_events + chunksize - 1) // chunksize
+            if args.max_events is not None and chunksize > 0:
+                maxchunks = max(1, (args.max_events + chunksize - 1) // chunksize)
+                logging.info(
+                    f"Applying event limit: max-events={args.max_events}, chunk-size={chunksize}, maxchunks={maxchunks}"
+                )
 
             # For event_selection_only mode, use a dummy regions_config
             regions_config_for_coffea = args.regions_config if not event_selection_only else None
@@ -258,7 +261,8 @@ def run_analyzer(args):
             
             coffea_analyzer = DarkBottomLineAnalyzerCoffeaProcessor(
                 config, regions_config_for_coffea, event_selection_output=args.event_selection_output,
-                event_selection_only=event_selection_only, output_format=output_format_to_use
+                event_selection_only=event_selection_only, output_format=output_format_to_use,
+                max_events=args.max_events
             )
 
             if args.executor == "futures":
@@ -739,7 +743,7 @@ Examples:
     analyze_parser.add_argument("--workers", type=int, default=4, help="Number of workers")
     analyze_parser.add_argument("--chunk-size", type=str, default=None,
                                help="Number of events per chunk for futures/dask executors. Use 'auto' for automatic optimization, or specify an integer (default: 50000 for futures, 200000 for dask). Only used with futures/dask executors.")
-    analyze_parser.add_argument("--max-events", type=int, help="Maximum events to process (converted to maxchunks when using chunk-size)")
+    analyze_parser.add_argument("--max-events", type=int, help="Maximum events to process across all chunks")
     analyze_parser.set_defaults(func=run_analyzer)
 
     # Train DNN command
