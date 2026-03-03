@@ -152,6 +152,22 @@ class DarkBottomLineAnalyzer:
         """
         start_time = time.time()
 
+        # Guard: if region_manager is None and we're not in event-selection-only mode with output, return early
+        if self.region_manager is None and not event_selection_output:
+            if event_selection_only:
+                logging.warning("event_selection_only=True but no event_selection_output provided and region_manager not initialized. Returning safe accumulator.")
+                return {
+                    "regions": {},
+                    "region_histograms": {},
+                    "region_cutflow": {},
+                    "region_validation": {},
+                    "metadata": {},
+                    "event_weights": {},
+                }
+            else:
+                logging.error("Region manager not initialized and no event_selection_output provided. Cannot process events.")
+                raise ValueError("Region manager must be initialized or event_selection_output must be provided")
+
         # Build physics objects
         logging.info("Building physics objects...")
         objects = build_objects(events, self.base_processor.config)
@@ -219,19 +235,29 @@ class DarkBottomLineAnalyzer:
             if event_selection_only:
                 logging.info("event_selection_only mode: stopping after event selection (no region analysis)")
                 processing_time = time.time() - start_time
+                # Return empty structure (not to be merged by Coffea in event_selection_only mode,
+                # but maintain compatibility for accumulator merging if multiple chunks occur)
                 return {
-                    "event_selection_only": True,
-                    "n_events_selected": len(events),
-                    "event_selection_output": event_selection_output,
-                    "processing_time": processing_time,
-                    "metadata": {
-                        "n_events_processed": len(events),
-                        "n_regions": 0,
-                        "processing_time": processing_time
-                    }
+                    "regions": {},
+                    "region_histograms": {},
+                    "region_cutflow": {},
+                    "region_validation": {},
+                    "metadata": {},
+                    "event_weights": {},
                 }
 
         # Step 3 (series): Apply region cuts to preselected events only
+        if self.region_manager is None:
+            logging.warning("No region manager configured. Returning early without region analysis.")
+            return {
+                "regions": {},
+                "region_histograms": {},
+                "region_cutflow": {},
+                "region_validation": {},
+                "metadata": {},
+                "event_weights": {},
+            }
+        
         logging.info("Applying region cuts...")
         region_masks = self.region_manager.apply_regions(events, objects)
 
@@ -742,9 +768,12 @@ if COFFEA_AVAILABLE:
                 "region_validation": processor.dict_accumulator({}),
                 "metadata": processor.dict_accumulator({}),
                 "event_weights": processor.dict_accumulator({}),
+                "_event_selection_chunk_files": processor.dict_accumulator({}),  # Use dict_accumulator for proper merging
             })
+            
             # Store selected events/objects for event_selection_output
             # Use file-based approach for cross-worker compatibility
+            self._temp_dir = None
             if event_selection_output:
                 import tempfile
                 import os
@@ -752,10 +781,6 @@ if COFFEA_AVAILABLE:
                 # Create a temp directory for chunk files (use a unique ID to avoid conflicts)
                 unique_id = str(uuid.uuid4())[:8]
                 self._temp_dir = tempfile.mkdtemp(prefix=f"dbl_event_selection_{unique_id}_")
-                # Store chunk file list in accumulator (for cross-worker merging)
-                # Use a dict accumulator with file paths as keys (for easy merging across workers)
-                # Note: each worker may have its own temp_dir, but we'll handle that in postprocess
-                self.accumulator["_event_selection_chunk_files"] = processor.dict_accumulator({})
 
         def process(self, events: ak.Array) -> Dict[str, Any]:
             """Process events using the analyzer."""
@@ -797,13 +822,18 @@ if COFFEA_AVAILABLE:
             self.processed_events += len(events_to_process)
             logging.info(f"Processing {len(events_to_process)} events (total processed: {self.processed_events}/{self.max_events if self.max_events else 'unlimited'})")
             
-            # When event_selection_only is true, pass it to analyzer to skip region analysis
-            result = self.analyzer.process(events_to_process, event_selection_output=None, 
-                                          event_selection_only=self.event_selection_only,
-                                          output_format=self.output_format)
+            # Call analyzer.process() with appropriate parameters
+            # In event_selection_only mode, analyzer will skip region analysis  
+            result = self.analyzer.process(
+                events_to_process, 
+                event_selection_output=self.event_selection_output if self.event_selection_only else None,
+                event_selection_only=self.event_selection_only,
+                output_format=self.output_format,
+                n_events_total=self.n_events_total
+            )
 
             # If event_selection_output is requested, collect selected events from this chunk
-            if self.event_selection_output:
+            if self.event_selection_output and self._temp_dir:
                 try:
                     import os
                     import pickle
@@ -828,12 +858,21 @@ if COFFEA_AVAILABLE:
                         pickle.dump({"events": selected_events, "objects": selected_objects}, f, protocol=pickle.HIGHEST_PROTOCOL)
 
                     # Add to accumulator dict (this will be merged across workers)
-                    # Use file path as key with dummy value for easy merging
-                    self.accumulator["_event_selection_chunk_files"][chunk_file] = True
-                    logging.info(f"Saved chunk to {chunk_file}, added to accumulator")
+                    # Note: Don't store in accumulator because Coffea can't properly merge True values
+                    # Instead, we'll dir-scan for chunk files in postprocess
+                    # self.accumulator["_event_selection_chunk_files"][chunk_file] = True
+                    logging.info(f"Saved chunk to {chunk_file}, accumulator will scan dir in postprocess")
                 except Exception as e:
                     logging.warning(f"Failed to collect selected events for event_selection_output: {e}", exc_info=True)
-            # Update accumulator with results
+            
+            # If event_selection_only mode is enabled, don't merge results (no region analysis was done)
+            if self.event_selection_only:
+                logging.info("event_selection_only mode: skipping accumulator merge (no region analysis)")
+                # Return the accumulator as-is for Coffea to merge properly
+                # The accumulator already has all required keys with dict_accumulator types
+                return self.accumulator
+            
+            # Update accumulator with results from normal analysis
             if "regions" in result:
                 for key, value in result["regions"].items():
                     if key not in self.accumulator["regions"]:
@@ -943,11 +982,18 @@ if COFFEA_AVAILABLE:
 
             # Get chunk files from accumulator (merged across all workers)
             # File paths are stored as keys in the dict accumulator
-            chunk_files_acc = accumulator.get("_event_selection_chunk_files", {})
-            if isinstance(chunk_files_acc, dict):
-                chunk_files = list(chunk_files_acc.keys())
+            # Note: Since we stopped storing in accumulator to fix merge issues,
+            # now we scan the temp_dir directly for chunk files
+            chunk_files = []
+            if self._temp_dir and os.path.exists(self._temp_dir):
+                chunk_files = [os.path.join(self._temp_dir, f) for f in os.listdir(self._temp_dir) if f.startswith("chunk_") and f.endswith(".pkl")]
             else:
-                chunk_files = []
+                # Fallback: try to get from accumulator in case it was populated before the change
+                chunk_files_acc = accumulator.get("_event_selection_chunk_files", {})
+                if isinstance(chunk_files_acc, dict):
+                    chunk_files = list(chunk_files_acc.keys())
+                else:
+                    chunk_files = []
 
             logging.info(f"postprocess called: event_selection_output={self.event_selection_output}, chunk_files={len(chunk_files)}")
 
