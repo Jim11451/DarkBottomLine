@@ -19,8 +19,6 @@ from .utils.chunk_optimizer import (
     optimize_chunk_size_for_files,
     parse_chunk_size_arg,
 )
-from .utils.event_counter import count_total_events
-from .utils.event_counter import count_total_events
 
 # Try to import Coffea for chunk-size support
 try:
@@ -170,6 +168,20 @@ def run_analyzer(args):
     """Run multi-region analysis."""
     logging.info("Running multi-region analysis...")
 
+    # Convert string boolean to actual boolean
+    event_selection_only = args.event_selection_only.lower() == "true"
+
+    # Validate arguments
+    if event_selection_only:
+        if not args.event_selection_output:
+            logging.error("--event-selection-output must be provided when using --event-selection-only")
+            sys.exit(1)
+        logging.info("Event selection only mode: will stop after event selection (no region analysis)")
+    else:
+        if not args.regions_config or not args.output:
+            logging.error("--regions-config and --output are required when --event-selection-only is false")
+            sys.exit(1)
+
     config = load_config(args.config)
 
     try:
@@ -179,24 +191,6 @@ def run_analyzer(args):
 
         is_txt_input = len(args.input) == 1 and args.input[0].endswith(".txt")
         input_files = _get_input_files(args.input)
-
-        # Count total events from input files (BEFORE any selection)
-        # If --max-events is specified, use that; otherwise count file size
-        n_events_total = None
-        if args.event_selection_output:
-            try:
-                if args.max_events:
-                    # Use max_events limit as the total events to process
-                    n_events_total = args.max_events
-                    logging.info(f"n_events set to --max-events limit: {n_events_total}")
-                else:
-                    # Count total events in input files
-                    logging.info("Counting total events from input files...")
-                    n_events_total = count_total_events(input_files, tree_name="Events")
-                    logging.info(f"Total events in input files (before selection): {n_events_total}")
-            except Exception as e:
-                logging.warning(f"Failed to determine n_events: {e}. Will skip n_events in output.")
-                n_events_total = None
 
         # Parse chunk size argument (can be "auto" or int)
         chunk_size = None
@@ -250,9 +244,21 @@ def run_analyzer(args):
             if args.max_events:
                 maxchunks = (args.max_events + chunksize - 1) // chunksize
 
+            # For event_selection_only mode, use a dummy regions_config
+            regions_config_for_coffea = args.regions_config if not event_selection_only else None
+            
+            # Auto-detect output format from event_selection_output extension if not explicitly set
+            output_format_to_use = args.output_format
+            if args.event_selection_output and output_format_to_use == "pkl":
+                # Check if explicit format is needed or can be auto-detected
+                if args.event_selection_output.endswith('.root'):
+                    output_format_to_use = 'root'
+                elif args.event_selection_output.endswith('.parquet'):
+                    output_format_to_use = 'parquet'
+            
             coffea_analyzer = DarkBottomLineAnalyzerCoffeaProcessor(
-                config, args.regions_config, event_selection_output=args.event_selection_output,
-                n_events_total=n_events_total
+                config, regions_config_for_coffea, event_selection_output=args.event_selection_output,
+                event_selection_only=event_selection_only, output_format=output_format_to_use
             )
 
             if args.executor == "futures":
@@ -305,17 +311,20 @@ def run_analyzer(args):
                 logging.info("Calling postprocess to finalize event_selection_output if needed...")
                 result = coffea_analyzer.postprocess(result)
 
-            # Save results
-            analyzer = DarkBottomLineAnalyzer(config, args.regions_config)
-            analyzer.accumulator = result
-            os.makedirs(os.path.dirname(args.output), exist_ok=True)
-            analyzer.save_results(args.output)
+            # Save results (only if not in event_selection_only mode)
+            if not event_selection_only:
+                analyzer = DarkBottomLineAnalyzer(config, args.regions_config)
+                analyzer.accumulator = result
+                os.makedirs(os.path.dirname(args.output), exist_ok=True)
+                analyzer.save_results(args.output, output_format=args.output_format)
+            else:
+                logging.info("Event selection only mode: skipping region analysis and main output save")
 
         else:
             # Original processing without chunking
-            analyzer = DarkBottomLineAnalyzer(config, args.regions_config)
+            analyzer = DarkBottomLineAnalyzer(config, args.regions_config) if not event_selection_only else None
 
-            if is_txt_input and len(input_files) > 1:
+            if is_txt_input and len(input_files) > 1 and not event_selection_only:
                 logging.info("Processing multiple files from .txt file iteratively.")
                 temp_files = []
                 output_dir = os.path.dirname(args.output)
@@ -337,10 +346,10 @@ def run_analyzer(args):
 
                     logging.info(f"Loaded {len(events)} events")
 
-                    results = analyzer.process(events, event_selection_output=None, n_events_total=None) # No event selection output for partial files
+                    results = analyzer.process(events, event_selection_output=None) # No event selection output for partial files
 
                     analyzer.accumulator = results
-                    analyzer.save_results(temp_output_path)
+                    analyzer.save_results(temp_output_path, output_format=args.output_format)
 
                 _merge_pickle_outputs(temp_files, args.output)
 
@@ -354,12 +363,28 @@ def run_analyzer(args):
 
                 logging.info(f"Loaded {len(events)} events")
 
-                results = analyzer.process(events, event_selection_output=args.event_selection_output,
-                                          n_events_total=n_events_total)
+                # Auto-detect output format from event_selection_output extension if not explicitly set
+                output_format_to_use = args.output_format
+                if args.event_selection_output and output_format_to_use == "pkl":
+                    # Check if explicit format is needed or can be auto-detected
+                    if args.event_selection_output.endswith('.root'):
+                        output_format_to_use = 'root'
+                    elif args.event_selection_output.endswith('.parquet'):
+                        output_format_to_use = 'parquet'
 
-                os.makedirs(os.path.dirname(args.output), exist_ok=True)
-                analyzer.accumulator = results
-                analyzer.save_results(args.output)
+                if event_selection_only:
+                    # Event selection only mode: create analyzer just to use its process method
+                    logging.info("Event selection only mode: performing event selection...")
+                    analyzer = DarkBottomLineAnalyzer(config, None)  # No regions config needed for event selection only
+                    results = analyzer.process(events, event_selection_output=args.event_selection_output,
+                                              event_selection_only=True, output_format=output_format_to_use)
+                    logging.info(f"Event selection completed, saved to {args.event_selection_output}")
+                else:
+                    results = analyzer.process(events, event_selection_output=args.event_selection_output,
+                                              event_selection_only=False, output_format=output_format_to_use)
+                    os.makedirs(os.path.dirname(args.output), exist_ok=True)
+                    analyzer.accumulator = results
+                    analyzer.save_results(args.output, output_format=args.output_format)
 
     except Exception as e:
         logging.error("Error in multi-region analysis: %s", e, exc_info=True)
@@ -699,10 +724,16 @@ Examples:
     # Analyze command
     analyze_parser = subparsers.add_parser("analyze", help="Run multi-region analysis")
     analyze_parser.add_argument("--config", required=True, help="Base configuration file")
-    analyze_parser.add_argument("--regions-config", required=True, help="Regions configuration file")
+    analyze_parser.add_argument("--regions-config", required=False, help="Regions configuration file (not required if --event-selection-only is used)")
     analyze_parser.add_argument("--input", nargs="+", required=True, help="Input file(s), can be a single .txt file listing paths")
-    analyze_parser.add_argument("--output", required=True, help="Output file")
+    analyze_parser.add_argument("--output", required=False, help="Output file (not required if --event-selection-only is used)")
     analyze_parser.add_argument("--event-selection-output", help="Path to save events that pass event-level selection (optional)")
+    analyze_parser.add_argument("--event-selection-only", type=str.lower, default="false", 
+                               choices=["true", "false"], 
+                               help="If true, stop after event selection and don't perform region analysis (default: false)")
+    analyze_parser.add_argument("--output-format", default="pkl", 
+                               choices=["pkl", "root", "parquet"],
+                               help="Output file format (default: pkl)")
     analyze_parser.add_argument("--executor", choices=["iterative", "futures", "dask"],
                                default="iterative", help="Execution backend")
     analyze_parser.add_argument("--workers", type=int, default=4, help="Number of workers")

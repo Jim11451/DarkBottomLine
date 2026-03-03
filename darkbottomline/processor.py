@@ -274,11 +274,12 @@ class DarkBottomLineProcessor:
         return skimmed
 
     def _save_event_selection(self, output_file: str, events: ak.Array, objects: Dict[str, Any], 
-                              max_events: Optional[int] = None, n_events_total: Optional[int] = None):
+                              max_events: Optional[int] = None, n_events_total: Optional[int] = None,
+                              event_weights: Optional[Dict[str, Any]] = None, output_format: str = "pkl"):
         """
         Save selected events and corresponding objects to a file.
 
-        Currently saves as a pickle unless a different format is implemented.
+        Currently supports pickle, ROOT formats.
         
         Args:
             output_file: Path to save the output file
@@ -286,166 +287,219 @@ class DarkBottomLineProcessor:
             objects: Selected objects (after event-level selection)
             max_events: Maximum events parameter from config (optional)
             n_events_total: Total number of events BEFORE selection (optional)
+            event_weights: Event weights dictionary (optional, includes all corrections)
+            output_format: Output format ("pkl", "root"). Default: "pkl" (saves both pkl and root)
         """
         import os
         import pickle
+        import numpy as np
 
         # Ensure output directory exists
         outdir = os.path.dirname(output_file)
         if outdir:
             os.makedirs(outdir, exist_ok=True)
 
-        # 1) Save a human/inspection-friendly representation where all
-        #    Awkward arrays are converted to plain Python lists (via
-        #    ak.to_list). This is what we write to `output_file`.
-        # 2) Also attempt to save the raw awkward data as a backup next to
-        #    the main file with suffix `.awk_raw.pkl` (best-effort).
-
-        # Build serializable dict
-        serializable = {}
+        # Determine actual output files based on format
+        # For backward compatibility, pkl format saves both pickle and ROOT files
+        save_pkl = output_format in ("pkl", "both")
+        save_root = output_format in ("root", "pkl", "both")  # pkl format also saves ROOT
         
-        # Add n_events: total events before selection
-        if n_events_total is not None:
-            serializable["n_events"] = n_events_total
-        
-        # Keep max_events for backward compatibility
-        if max_events is not None:
-            serializable["total_event"] = max_events
-            
-        try:
-            # Convert events (awkward array) to list-of-records where possible
-            try:
-                serializable["events"] = ak.to_list(events)
-            except Exception:
-                # Fallback: try to coerce to Python list directly
-                try:
-                    serializable["events"] = list(events)
-                except Exception:
-                    serializable["events"] = None
-
-            # Convert objects: for each awkward array, convert to list
-            serializable_objects = {}
-            for k, v in objects.items():
-                if isinstance(v, ak.Array):
-                    try:
-                        serializable_objects[k] = ak.to_list(v)
-                    except Exception:
-                        try:
-                            serializable_objects[k] = list(v)
-                        except Exception:
-                            serializable_objects[k] = None
-                else:
-                    # Keep non-Awkward values as-is (likely small metadata)
-                    serializable_objects[k] = v
-
-            serializable["objects"] = serializable_objects
-
-            # Ensure output directory exists
-            outdir = os.path.dirname(output_file)
-            if outdir:
-                os.makedirs(outdir, exist_ok=True)
-
-            # Write the safe version
-            with open(output_file, "wb") as f:
-                pickle.dump(serializable, f, protocol=pickle.HIGHEST_PROTOCOL)
-
-            logging.info(f"Event selection (serializable) saved to {output_file}")
-
-        except Exception as e:
-            logging.warning(f"Failed to save serializable event selection to {output_file}: {e}")
-
-        # Try to save raw awkward structures as a backup for advanced users
-        try:
-            raw_backup = output_file + ".awk_raw.pkl"
-            with open(raw_backup, "wb") as f:
-                pickle.dump({"events": events, "objects": objects}, f, protocol=pickle.HIGHEST_PROTOCOL)
-            logging.info(f"Raw awkward backup saved to {raw_backup}")
-        except Exception as e:
-            logging.warning(f"Failed to save raw awkward backup to {raw_backup}: {e}")
-
-
-        # Always write a ROOT file alongside the pickle file for easy inspection
-        # If output_file ends with .root, use it directly; otherwise create .root version
-        root_file = output_file
-        if not output_file.endswith('.root'):
-            # Replace extension with .root
-            root_file = os.path.splitext(output_file)[0] + '.root'
-
-        try:
-            import uproot
-            import numpy as np
-
-            logging.info(f"Creating ROOT file: {root_file}")
-
-            # Prepare flat scalar branches
-            branches = {}
-            # Standard event identifiers
-            try:
-                branches['event'] = ak.to_numpy(events['event'])
-            except Exception:
-                branches['event'] = np.asarray(ak.to_list(events.get('event', [])))
-            try:
-                branches['run'] = ak.to_numpy(events['run'])
-            except Exception:
-                branches['run'] = np.asarray(ak.to_list(events.get('run', [])))
-            try:
-                branches['luminosityBlock'] = ak.to_numpy(events['luminosityBlock'])
-            except Exception:
-                branches['luminosityBlock'] = np.asarray(ak.to_list(events.get('luminosityBlock', [])))
-
-            # MET scalars
-            def _get_met_field_array(field_name_v15, field_name_v12):
-                if field_name_v15 in events.fields:
-                    return ak.to_numpy(events[field_name_v15])
-                elif field_name_v12 in events.fields:
-                    return ak.to_numpy(events[field_name_v12])
-                else:
-                    # Return an empty array of appropriate size if neither field exists
-                    return np.asarray([]) if len(events) == 0 else np.zeros(len(events), dtype=float)
-
-            branches['PFMET_pt'] = _get_met_field_array('PFMET_pt', 'MET_pt')
-            branches['PFMET_phi'] = _get_met_field_array('PFMET_phi', 'MET_phi')
-            branches['PFMET_significance'] = _get_met_field_array('PFMET_significance', 'MET_significance')
-
-            # Object multiplicities
-            def safe_num(obj_key):
-                arr = objects.get(obj_key, ak.Array([]))
-                try:
-                    return ak.to_numpy(ak.num(arr, axis=1))
-                except Exception:
-                    return np.asarray([0] * len(branches.get('event', [])))
-
-            branches['n_muons'] = safe_num('muons')
-            branches['n_electrons'] = safe_num('electrons')
-            branches['n_taus'] = safe_num('taus')
-            branches['n_jets'] = safe_num('jets')
-            branches['n_bjets'] = safe_num('bjets')
-
-            # Write to ROOT
-            outdir = os.path.dirname(root_file)
-            if outdir:
-                os.makedirs(outdir, exist_ok=True)
-
-            with uproot.recreate(root_file) as f:
-                f['Events'] = branches
-
-                # Add metadata tree with n_events (total events before selection)
-                if n_events_total is not None:
-                    metadata_dict = {
-                        'n_events': np.array([n_events_total], dtype=np.int64),
-                        'n_selected_events': np.array([len(events)], dtype=np.int64),
-                    }
-                    f['Metadata'] = metadata_dict
-                    logging.info(f"Added n_events={n_events_total} to ROOT file metadata")
-
-            # Verify file was created
-            if os.path.exists(root_file):
-                file_size = os.path.getsize(root_file)
-                logging.info(f"✓ Event selection exported to ROOT file {root_file} ({file_size} bytes, {len(events)} events)")
+        # Explicitly adjust extension if format is specified
+        if output_format == "root":
+            # Force root extension
+            if not output_file.endswith('.root'):
+                output_file_pkl = os.path.splitext(output_file)[0] + '.root'
+                output_file_root = output_file_pkl
             else:
-                logging.error(f"✗ ROOT file {root_file} was not created!")
-        except Exception as e:
-            logging.error(f"Failed to write ROOT event selection to {root_file}: {e}", exc_info=True)
+                output_file_pkl = output_file
+                output_file_root = output_file
+            save_pkl = False  # Don't save pickle when root format is specified
+        elif output_format == "pkl":
+            if not output_file.endswith('.pkl'):
+                output_file_pkl = os.path.splitext(output_file)[0] + '.pkl'
+            else:
+                output_file_pkl = output_file
+            output_file_root = os.path.splitext(output_file)[0] + '.root'
+        else:
+            output_file_pkl = output_file + ".pkl" if not output_file.endswith('.pkl') else output_file
+            output_file_root = os.path.splitext(output_file)[0] + '.root'
+
+        # Save pickle file if specified
+        if save_pkl:
+            # 1) Save a human/inspection-friendly representation where all
+            #    Awkward arrays are converted to plain Python lists (via
+            #    ak.to_list). This is what we write to `output_file`.
+            # 2) Also attempt to save the raw awkward data as a backup next to
+            #    the main file with suffix `.awk_raw.pkl` (best-effort).
+
+            # Build serializable dict
+            serializable = {}
+            
+            # Add n_events: total events before selection
+            if n_events_total is not None:
+                serializable["n_events"] = n_events_total
+            
+            # Keep max_events for backward compatibility
+            if max_events is not None:
+                serializable["total_event"] = max_events
+                
+            try:
+                # Convert events (awkward array) to list-of-records where possible
+                try:
+                    serializable["events"] = ak.to_list(events)
+                except Exception:
+                    # Fallback: try to coerce to Python list directly
+                    try:
+                        serializable["events"] = list(events)
+                    except Exception:
+                        serializable["events"] = None
+
+                # Convert objects: for each awkward array, convert to list
+                serializable_objects = {}
+                for k, v in objects.items():
+                    if isinstance(v, ak.Array):
+                        try:
+                            serializable_objects[k] = ak.to_list(v)
+                        except Exception:
+                            try:
+                                serializable_objects[k] = list(v)
+                            except Exception:
+                                serializable_objects[k] = None
+                    else:
+                        # Keep non-Awkward values as-is (likely small metadata)
+                        serializable_objects[k] = v
+
+                serializable["objects"] = serializable_objects
+
+                # Add event weights if provided (now with corrections)
+                if event_weights:
+                    serializable_weights = {}
+                    for name, val in event_weights.items():
+                        if isinstance(val, dict):
+                            # Dictionary of different variations (e.g., central/up/down)
+                            serializable_weights[name] = {}
+                            for k, v in val.items():
+                                if isinstance(v, np.ndarray):
+                                    serializable_weights[name][k] = v.tolist()
+                                else:
+                                    serializable_weights[name][k] = v
+                        elif isinstance(val, np.ndarray):
+                            # Single numpy array
+                            serializable_weights[name] = val.tolist()
+                        else:
+                            serializable_weights[name] = val
+                    serializable["event_weights"] = serializable_weights
+
+                # Ensure output directory exists
+                outdir = os.path.dirname(output_file_pkl)
+                if outdir:
+                    os.makedirs(outdir, exist_ok=True)
+
+                # Write the safe version
+                with open(output_file_pkl, "wb") as f:
+                    pickle.dump(serializable, f, protocol=pickle.HIGHEST_PROTOCOL)
+
+                logging.info(f"Event selection (serializable) saved to {output_file_pkl}")
+
+            except Exception as e:
+                logging.warning(f"Failed to save serializable event selection to {output_file_pkl}: {e}")
+
+            # Try to save raw awkward structures as a backup for advanced users
+            try:
+                raw_backup = output_file_pkl + ".awk_raw.pkl"
+                with open(raw_backup, "wb") as f:
+                    pickle.dump({"events": events, "objects": objects, "event_weights": event_weights}, f, protocol=pickle.HIGHEST_PROTOCOL)
+                logging.info(f"Raw awkward backup saved to {raw_backup}")
+            except Exception as e:
+                logging.warning(f"Failed to save raw awkward backup to {raw_backup}: {e}")
+
+        # Save ROOT file if specified
+        if save_root:
+            try:
+                import uproot
+
+                logging.info(f"Creating ROOT file: {output_file_root}")
+
+                # Prepare flat scalar branches
+                branches = {}
+                # Standard event identifiers
+                try:
+                    branches['event'] = ak.to_numpy(events['event'])
+                except Exception:
+                    branches['event'] = np.asarray(ak.to_list(events.get('event', [])))
+                try:
+                    branches['run'] = ak.to_numpy(events['run'])
+                except Exception:
+                    branches['run'] = np.asarray(ak.to_list(events.get('run', [])))
+                try:
+                    branches['luminosityBlock'] = ak.to_numpy(events['luminosityBlock'])
+                except Exception:
+                    branches['luminosityBlock'] = np.asarray(ak.to_list(events.get('luminosityBlock', [])))
+
+                # MET scalars
+                def _get_met_field_array(field_name_v15, field_name_v12):
+                    if field_name_v15 in events.fields:
+                        return ak.to_numpy(events[field_name_v15])
+                    elif field_name_v12 in events.fields:
+                        return ak.to_numpy(events[field_name_v12])
+                    else:
+                        # Return an empty array of appropriate size if neither field exists
+                        return np.asarray([]) if len(events) == 0 else np.zeros(len(events), dtype=float)
+
+                branches['PFMET_pt'] = _get_met_field_array('PFMET_pt', 'MET_pt')
+                branches['PFMET_phi'] = _get_met_field_array('PFMET_phi', 'MET_phi')
+                branches['PFMET_significance'] = _get_met_field_array('PFMET_significance', 'MET_significance')
+
+                # Object multiplicities
+                def safe_num(obj_key):
+                    arr = objects.get(obj_key, ak.Array([]))
+                    try:
+                        return ak.to_numpy(ak.num(arr, axis=1))
+                    except Exception:
+                        return np.asarray([0] * len(branches.get('event', [])))
+
+                branches['n_muons'] = safe_num('muons')
+                branches['n_electrons'] = safe_num('electrons')
+                branches['n_taus'] = safe_num('taus')
+                branches['n_jets'] = safe_num('jets')
+                branches['n_bjets'] = safe_num('bjets')
+
+                # Add event weights if provided
+                if event_weights:
+                    for name, val in event_weights.items():
+                        if isinstance(val, dict):
+                            # Dictionary with central/up/down variations
+                            for var, arr in val.items():
+                                if isinstance(arr, np.ndarray):
+                                    branches[f'{name}_{var}'] = arr
+                        elif isinstance(val, np.ndarray):
+                            branches[name] = val
+
+                # Write to ROOT
+                outdir = os.path.dirname(output_file_root)
+                if outdir:
+                    os.makedirs(outdir, exist_ok=True)
+
+                with uproot.recreate(output_file_root) as f:
+                    f['Events'] = branches
+
+                    # Add metadata tree with n_events (total events before selection)
+                    if n_events_total is not None:
+                        metadata_dict = {
+                            'n_events': np.array([n_events_total], dtype=np.int64),
+                            'n_selected_events': np.array([len(events)], dtype=np.int64),
+                        }
+                        f['Metadata'] = metadata_dict
+                        logging.info(f"Added n_events={n_events_total} to ROOT file metadata")
+
+                # Verify file was created
+                if os.path.exists(output_file_root):
+                    file_size = os.path.getsize(output_file_root)
+                    logging.info(f"✓ Event selection exported to ROOT file {output_file_root} ({file_size} bytes, {len(events)} events)")
+                else:
+                    logging.error(f"✗ ROOT file {output_file_root} was not created!")
+            except Exception as e:
+                logging.error(f"Failed to write ROOT event selection to {output_file_root}: {e}", exc_info=True)
 
     def get_histogram_statistics(self) -> Dict[str, Dict[str, float]]:
         """

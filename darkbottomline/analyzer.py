@@ -34,25 +34,26 @@ class DarkBottomLineAnalyzer:
     Multi-region analyzer extending the base processor.
     """
 
-    def __init__(self, config: Dict[str, Any], regions_config_path: str):
+    def __init__(self, config: Dict[str, Any], regions_config_path: Optional[str] = None):
         """
         Initialize analyzer with configuration and regions.
 
         Args:
             config: Base configuration dictionary
-            regions_config_path: Path to regions configuration file
+            regions_config_path: Path to regions configuration file (optional for event-selection-only mode)
         """
         # Initialize base processor
         self.base_processor = DarkBottomLineProcessor(config)
 
-        # Initialize region manager
-        self.region_manager = RegionManager(regions_config_path)
-
-        # Initialize histogram manager for regions
-        self.histogram_manager = HistogramManager()
-
-        # Create region-specific histograms
-        self.region_histograms = self._create_region_histograms()
+        # Initialize region manager (only if regions_config_path is provided)
+        if regions_config_path:
+            self.region_manager = RegionManager(regions_config_path)
+            self.histogram_manager = HistogramManager()
+            self.region_histograms = self._create_region_histograms()
+        else:
+            self.region_manager = None
+            self.histogram_manager = None
+            self.region_histograms = {}
 
         # Initialize accumulator
         self.accumulator = {
@@ -64,7 +65,7 @@ class DarkBottomLineAnalyzer:
             "event_weights": {},
         }
 
-        logging.info(f"Initialized analyzer with {len(self.region_manager.regions)} regions")
+        logging.info(f"Initialized analyzer with {len(self.region_manager.regions) if self.region_manager else 0} regions")
 
     def _create_region_histograms(self) -> Dict[str, Dict[str, Any]]:
         """
@@ -131,7 +132,8 @@ class DarkBottomLineAnalyzer:
             }
 
     def process(self, events: ak.Array, event_selection_output: Optional[str] = None,
-                n_events_total: Optional[int] = None) -> Dict[str, Any]:
+                n_events_total: Optional[int] = None, event_selection_only: bool = False,
+                output_format: str = "pkl") -> Dict[str, Any]:
         """
         Process events through all regions.
 
@@ -140,11 +142,13 @@ class DarkBottomLineAnalyzer:
 
         Args:
             events: Awkward Array of events
-            event_selection_output: If set, save preselected events to this path
+            event_selection_output: If set, save preselected events to this path (AFTER weight corrections)
             n_events_total: Total number of events before selection (from input files)
+            event_selection_only: If True, stop after saving event_selection_output (skip region analysis)
+            output_format: Output format for event selection ("pkl", "root", "parquet")
 
         Returns:
-            Analysis results with per-region histograms
+            Analysis results with per-region histograms (or event selection only if event_selection_only=True)
         """
         start_time = time.time()
 
@@ -165,25 +169,8 @@ class DarkBottomLineAnalyzer:
             logging.error(f"Preselection failed: {e}", exc_info=True)
             raise
 
-        # Optionally save preselected events to file
-        if event_selection_output:
-            try:
-                logging.info(f"Saving preselected events to {event_selection_output} ({len(events)} events)")
-                self.base_processor._save_event_selection(
-                    event_selection_output, events, objects, 
-                    max_events=self.base_processor.config.get("max_events"),
-                    n_events_total=n_events_total
-                )
-                import os
-                if os.path.exists(event_selection_output):
-                    file_size = os.path.getsize(event_selection_output)
-                    logging.info(f"✓ Preselection saved to {event_selection_output} ({file_size} bytes)")
-                else:
-                    logging.error(f"✗ File {event_selection_output} was not created!")
-            except Exception as e:
-                logging.error(f"Failed to save preselection to {event_selection_output}: {e}", exc_info=True)
-
         # Step 2: Compute corrections and nominal total weight (for histograms + saving)
+        # NOTE: This must happen BEFORE saving event_selection_output to ensure event weights are corrected
         logging.info("Computing corrections and event weights...")
         event_weights_nominal = None
         event_weights_save = {}
@@ -207,6 +194,42 @@ class DarkBottomLineAnalyzer:
                 "pileup": np.ones(n_ev, dtype=np.float64),
                 "weight_total_nominal": np.ones(n_ev, dtype=np.float64),
             }
+
+        # Step 2b: Optionally save preselected+weighted events to file AFTER weight corrections
+        if event_selection_output:
+            try:
+                logging.info(f"Saving event-selected (with weights) to {event_selection_output} ({len(events)} events)")
+                self.base_processor._save_event_selection(
+                    event_selection_output, events, objects, 
+                    max_events=self.base_processor.config.get("max_events"),
+                    n_events_total=n_events_total,
+                    event_weights=event_weights_save,
+                    output_format=output_format
+                )
+                import os
+                if os.path.exists(event_selection_output):
+                    file_size = os.path.getsize(event_selection_output)
+                    logging.info(f"✓ Event selection (with weights) saved to {event_selection_output} ({file_size} bytes)")
+                else:
+                    logging.error(f"✗ File {event_selection_output} was not created!")
+            except Exception as e:
+                logging.error(f"Failed to save event selection to {event_selection_output}: {e}", exc_info=True)
+            
+            # If event_selection_only mode is enabled, return early
+            if event_selection_only:
+                logging.info("event_selection_only mode: stopping after event selection (no region analysis)")
+                processing_time = time.time() - start_time
+                return {
+                    "event_selection_only": True,
+                    "n_events_selected": len(events),
+                    "event_selection_output": event_selection_output,
+                    "processing_time": processing_time,
+                    "metadata": {
+                        "n_events_processed": len(events),
+                        "n_regions": 0,
+                        "processing_time": processing_time
+                    }
+                }
 
         # Step 3 (series): Apply region cuts to preselected events only
         logging.info("Applying region cuts...")
@@ -535,24 +558,27 @@ class DarkBottomLineAnalyzer:
         summary = "Region Analysis Summary:\n"
         summary += "=" * 50 + "\n"
 
-        # Region summary
-        region_summary = self.region_manager.get_region_summary()
-        summary += f"Number of regions: {region_summary['n_regions']}\n"
-        summary += f"Signal regions: {self.region_manager.get_signal_regions()}\n"
-        summary += f"Control regions: {self.region_manager.get_control_regions()}\n"
-        summary += f"Validation regions: {self.region_manager.get_validation_regions()}\n\n"
+        # Region summary (only if region_manager is initialized)
+        if self.region_manager:
+            region_summary = self.region_manager.get_region_summary()
+            summary += f"Number of regions: {region_summary['n_regions']}\n"
+            summary += f"Signal regions: {self.region_manager.get_signal_regions()}\n"
+            summary += f"Control regions: {self.region_manager.get_control_regions()}\n"
+            summary += f"Validation regions: {self.region_manager.get_validation_regions()}\n\n"
 
-        # Region details
-        for region_name, region in self.region_manager.regions.items():
-            summary += f"{region_name}:\n"
-            summary += f"  Description: {region.description}\n"
-            summary += f"  Cuts: {len(region.cuts)} cuts\n"
-            summary += f"  Expected backgrounds: {region.expected_backgrounds}\n"
-            summary += f"  Blind data: {region.blind_data}\n"
-            summary += f"  Priority: {region.priority}\n"
-            if region.transfer_factor_to_SR:
-                summary += f"  Transfer factor: {region.transfer_factor_to_SR}\n"
-            summary += "\n"
+            # Region details
+            for region_name, region in self.region_manager.regions.items():
+                summary += f"{region_name}:\n"
+                summary += f"  Description: {region.description}\n"
+                summary += f"  Cuts: {len(region.cuts)} cuts\n"
+                summary += f"  Expected backgrounds: {region.expected_backgrounds}\n"
+                summary += f"  Blind data: {region.blind_data}\n"
+                summary += f"  Priority: {region.priority}\n"
+                if region.transfer_factor_to_SR:
+                    summary += f"  Transfer factor: {region.transfer_factor_to_SR}\n"
+                summary += "\n"
+        else:
+            summary += "No region manager initialized (event selection only mode)\n"
 
         return summary
 
@@ -592,19 +618,32 @@ class DarkBottomLineAnalyzer:
 
         return summary
 
-    def save_results(self, output_file: str):
+    def save_results(self, output_file: str, output_format: str = "pkl"):
         """
         Save analysis results to file.
 
         Args:
             output_file: Output file path
+            output_format: Output format ("pkl", "root", "parquet"). If output_format is specified,
+                          use it; otherwise infer from output_file extension.
         """
-        if output_file.endswith('.parquet'):
-            self._save_parquet(output_file)
-        elif output_file.endswith('.root'):
-            self._save_root(output_file)
+        # If output_format is explicitly specified, add extension if needed
+        if output_format and output_format != "pkl":
+            if not output_file.endswith(f'.{output_format}'):
+                output_file_with_format = f"{output_file.rsplit('.', 1)[0]}.{output_format}" if '.' in output_file else f"{output_file}.{output_format}"
+            else:
+                output_file_with_format = output_file
         else:
-            self._save_pickle(output_file)
+            output_file_with_format = output_file
+        
+        # Route to appropriate save function based on format
+        if output_file_with_format.endswith('.parquet'):
+            self._save_parquet(output_file_with_format)
+        elif output_file_with_format.endswith('.root'):
+            self._save_root(output_file_with_format)
+        else:
+            # Default to pickle
+            self._save_pickle(output_file_with_format)
 
     def _save_parquet(self, output_file: str):
         """Save results as Parquet file (region variables + per-event weights)."""
@@ -672,13 +711,25 @@ if COFFEA_AVAILABLE:
         Coffea-compatible processor wrapper for multi-region analyzer.
         """
 
-        def __init__(self, config: Dict[str, Any], regions_config_path: str, 
+        def __init__(self, config: Dict[str, Any], regions_config_path: Optional[str] = None, 
                      event_selection_output: Optional[str] = None,
-                     n_events_total: Optional[int] = None):
+                     n_events_total: Optional[int] = None,
+                     event_selection_only: bool = False,
+                     output_format: Optional[str] = None):
             self.config = config
             self.regions_config_path = regions_config_path
             self.event_selection_output = event_selection_output
             self.n_events_total = n_events_total  # Total events before selection
+            self.event_selection_only = event_selection_only
+            # Auto-detect output_format from event_selection_output extension if not specified
+            if output_format is None and event_selection_output:
+                if event_selection_output.endswith('.root'):
+                    output_format = 'root'
+                elif event_selection_output.endswith('.parquet'):
+                    output_format = 'parquet'
+                else:
+                    output_format = 'pkl'
+            self.output_format = output_format or 'pkl'
             self.analyzer = DarkBottomLineAnalyzer(config, regions_config_path)
             # Initialize accumulator for Coffea
             self.accumulator = processor.dict_accumulator({
@@ -705,8 +756,10 @@ if COFFEA_AVAILABLE:
 
         def process(self, events: ak.Array) -> Dict[str, Any]:
             """Process events using the analyzer."""
-            # Don't save event_selection_output per chunk, accumulate instead
-            result = self.analyzer.process(events, event_selection_output=None)
+            # When event_selection_only is true, pass it to analyzer to skip region analysis
+            result = self.analyzer.process(events, event_selection_output=None, 
+                                          event_selection_only=self.event_selection_only,
+                                          output_format=self.output_format)
 
             # If event_selection_output is requested, collect selected events from this chunk
             if self.event_selection_output:
@@ -902,7 +955,8 @@ if COFFEA_AVAILABLE:
                         self.analyzer.base_processor._save_event_selection(
                             self.event_selection_output, all_selected_events, all_selected_objects, 
                             max_events=self.config.get("max_events"),
-                            n_events_total=self.n_events_total
+                            n_events_total=self.n_events_total,
+                            output_format=self.output_format
                         )
                         # Verify file was created
                         if os.path.exists(self.event_selection_output):
