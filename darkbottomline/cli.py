@@ -192,6 +192,20 @@ def run_analyzer(args):
         is_txt_input = len(args.input) == 1 and args.input[0].endswith(".txt")
         input_files = _get_input_files(args.input)
 
+        # Total events before selection to be saved into event-selection-output metadata.
+        # Rule: use --max-events when specified; otherwise use total events from input files.
+        n_events_total = args.max_events if args.max_events is not None else None
+        if n_events_total is None and args.event_selection_output:
+            try:
+                n_events_total = 0
+                for file_path in input_files:
+                    tree = uproot.open(f"{file_path}:Events")
+                    n_events_total += int(tree.num_entries)
+                logging.info(f"Computed n_events_total={n_events_total} from input files")
+            except Exception as e:
+                logging.warning(f"Could not compute n_events_total from input files: {e}")
+                n_events_total = None
+
         # Parse chunk size argument (can be "auto" or int)
         chunk_size = None
         if hasattr(args, 'chunk_size') and args.chunk_size is not None:
@@ -262,7 +276,7 @@ def run_analyzer(args):
             coffea_analyzer = DarkBottomLineAnalyzerCoffeaProcessor(
                 config, regions_config_for_coffea, event_selection_output=args.event_selection_output,
                 event_selection_only=event_selection_only, output_format=output_format_to_use,
-                max_events=args.max_events
+                max_events=args.max_events, n_events_total=n_events_total
             )
 
             if args.executor == "futures":
@@ -381,11 +395,13 @@ def run_analyzer(args):
                     logging.info("Event selection only mode: performing event selection...")
                     analyzer = DarkBottomLineAnalyzer(config, None)  # No regions config needed for event selection only
                     results = analyzer.process(events, event_selection_output=args.event_selection_output,
-                                              event_selection_only=True, output_format=output_format_to_use)
+                                              event_selection_only=True, output_format=output_format_to_use,
+                                              n_events_total=n_events_total)
                     logging.info(f"Event selection completed, saved to {args.event_selection_output}")
                 else:
                     results = analyzer.process(events, event_selection_output=args.event_selection_output,
-                                              event_selection_only=False, output_format=output_format_to_use)
+                                              event_selection_only=False, output_format=output_format_to_use,
+                                              n_events_total=n_events_total)
                     os.makedirs(os.path.dirname(args.output), exist_ok=True)
                     analyzer.accumulator = results
                     analyzer.save_results(args.output, output_format=args.output_format)
