@@ -121,16 +121,19 @@ def select_events(
     # Recoil = | -( pTmiss + sum pT(leptons) ) | (same convention as region Recoil)
     muons = objects.get("muons", ak.Array([]))
     electrons = objects.get("electrons", ak.Array([]))
-    lep_pt_sum = ak.zeros_like(met_pt)
+    lep_px = ak.zeros_like(met_pt)
+    lep_py = ak.zeros_like(met_pt)
     try:
         if len(ak.flatten(muons)) > 0:
-            lep_pt_sum = lep_pt_sum + ak.sum(muons.pt, axis=1)
+            lep_px = lep_px + ak.sum(muons.pt * np.cos(muons.phi), axis=1)
+            lep_py = lep_py + ak.sum(muons.pt * np.sin(muons.phi), axis=1)
         if len(ak.flatten(electrons)) > 0:
-            lep_pt_sum = lep_pt_sum + ak.sum(electrons.pt, axis=1)
+            lep_px = lep_px + ak.sum(electrons.pt * np.cos(electrons.phi), axis=1)
+            lep_py = lep_py + ak.sum(electrons.pt * np.sin(electrons.phi), axis=1)
     except (Exception, BaseException):
         pass
-    recoil_px = -(met_pt * np.cos(met_phi) + ak.fill_none(lep_pt_sum, 0.0))
-    recoil_py = -(met_pt * np.sin(met_phi))
+    recoil_px = -(met_pt * np.cos(met_phi) + ak.fill_none(lep_px, 0.0))
+    recoil_py = -(met_pt * np.sin(met_phi) + ak.fill_none(lep_py, 0.0))
     recoil = np.sqrt(recoil_px**2 + recoil_py**2)
     recoil_cut = recoil > met_min
     logger.info(f"    Recoil: min={ak.min(recoil):.1f}, max={ak.max(recoil):.1f}, mean={ak.mean(recoil):.1f}")
