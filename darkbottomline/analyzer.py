@@ -773,14 +773,13 @@ if COFFEA_AVAILABLE:
             
             # Store selected events/objects for event_selection_output
             # Use file-based approach for cross-worker compatibility
-            self._temp_dir = None
-            if event_selection_output:
-                import tempfile
-                import os
-                import uuid
-                # Create a temp directory for chunk files (use a unique ID to avoid conflicts)
-                unique_id = str(uuid.uuid4())[:8]
-                self._temp_dir = tempfile.mkdtemp(prefix=f"dbl_event_selection_{unique_id}_")
+            # Always create _temp_dir so event_weights can be saved to chunk files
+            # regardless of whether event_selection_output is requested.
+            import tempfile
+            import os
+            import uuid
+            unique_id = str(uuid.uuid4())[:8]
+            self._temp_dir = tempfile.mkdtemp(prefix=f"dbl_chunks_{unique_id}_")
 
         def process(self, events: ak.Array) -> Dict[str, Any]:
             """Process events using the analyzer."""
@@ -872,73 +871,17 @@ if COFFEA_AVAILABLE:
                 # The accumulator already has all required keys with dict_accumulator types
                 return self.accumulator
             
-            # Update accumulator with results from normal analysis
-            if "regions" in result:
-                for key, value in result["regions"].items():
-                    if key not in self.accumulator["regions"]:
-                        self.accumulator["regions"][key] = value
-                    else:
-                        # Merge if needed
-                        if isinstance(self.accumulator["regions"][key], dict) and isinstance(value, dict):
-                            self.accumulator["regions"][key].update(value)
-            if "region_histograms" in result:
-                for region_name, histograms in result["region_histograms"].items():
-                    if region_name not in self.accumulator["region_histograms"]:
-                        self.accumulator["region_histograms"][region_name] = processor.dict_accumulator({})
-                    for hist_name, hist in histograms.items():
-                        if hist_name in self.accumulator["region_histograms"][region_name]:
-                            # Add histograms if they support it
-                            if hasattr(self.accumulator["region_histograms"][region_name][hist_name], 'add'):
-                                self.accumulator["region_histograms"][region_name][hist_name].add(hist)
-                            else:
-                                self.accumulator["region_histograms"][region_name][hist_name] = hist
-                        else:
-                            self.accumulator["region_histograms"][region_name][hist_name] = hist
-            if "region_cutflow" in result:
-                for key, value in result["region_cutflow"].items():
-                    if key not in self.accumulator["region_cutflow"]:
-                        # Wrap plain dict in dict_accumulator for proper Coffea merging
-                        if isinstance(value, dict):
-                            self.accumulator["region_cutflow"][key] = processor.dict_accumulator(value)
-                        else:
-                            self.accumulator["region_cutflow"][key] = value
-                    else:
-                        # Merge cutflow dictionaries - handle both dict_accumulator and plain dict
-                        if isinstance(value, dict):
-                            # If accumulator value is also a dict_accumulator, merge properly
-                            if hasattr(self.accumulator["region_cutflow"][key], 'add'):
-                                # It's a dict_accumulator, create a temporary one and add
-                                temp_acc = processor.dict_accumulator(value)
-                                self.accumulator["region_cutflow"][key].add(temp_acc)
-                            else:
-                                # It's a plain dict, merge manually
-                                for k, v in value.items():
-                                    if k not in self.accumulator["region_cutflow"][key]:
-                                        self.accumulator["region_cutflow"][key][k] = v
-                                    else:
-                                        self.accumulator["region_cutflow"][key][k] = self.accumulator["region_cutflow"][key][k] + v
-            if "region_validation" in result:
-                # Handle region_validation - wrap in dict_accumulator for proper merging
-                validation = result["region_validation"]
-                if isinstance(validation, dict):
-                    # Merge validation results
-                    for key, value in validation.items():
-                        if key not in self.accumulator["region_validation"]:
-                            # Wrap plain dict/values in dict_accumulator if needed
-                            if isinstance(value, dict):
-                                self.accumulator["region_validation"][key] = processor.dict_accumulator(value)
-                            else:
-                                self.accumulator["region_validation"][key] = value
-                        else:
-                            # Merge validation dictionaries
-                            if isinstance(value, dict):
-                                if hasattr(self.accumulator["region_validation"][key], 'add'):
-                                    temp_acc = processor.dict_accumulator(value)
-                                    self.accumulator["region_validation"][key].add(temp_acc)
-                                else:
-                                    # Plain dict merge
-                                    if isinstance(self.accumulator["region_validation"][key], dict):
-                                        self.accumulator["region_validation"][key].update(value)
+            # Update accumulator with results from normal analysis.
+            # Important: convert nested Python dicts recursively into
+            # dict_accumulator to avoid Coffea inter-worker dict += dict errors.
+            if "regions" in result and isinstance(result["regions"], dict):
+                self.accumulator["regions"].add(self._to_dict_accumulator(result["regions"]))
+            if "region_histograms" in result and isinstance(result["region_histograms"], dict):
+                self.accumulator["region_histograms"].add(self._to_dict_accumulator(result["region_histograms"]))
+            if "region_cutflow" in result and isinstance(result["region_cutflow"], dict):
+                self.accumulator["region_cutflow"].add(self._to_dict_accumulator(result["region_cutflow"]))
+            if "region_validation" in result and isinstance(result["region_validation"], dict):
+                self.accumulator["region_validation"].add(self._to_dict_accumulator(result["region_validation"]))
             if "metadata" in result:
                 self.accumulator["metadata"].update(result.get("metadata", {}))
             # Merge event_weights (concatenate arrays across chunks)
@@ -946,33 +889,52 @@ if COFFEA_AVAILABLE:
                 self._merge_event_weights_into_accumulator(result["event_weights"])
             return self.accumulator
 
+        def _to_dict_accumulator(self, value: Any):
+            """Recursively convert nested dicts to coffea dict_accumulator."""
+            if isinstance(value, dict):
+                return processor.dict_accumulator(
+                    {k: self._to_dict_accumulator(v) for k, v in value.items()}
+                )
+            return value
+
         def _merge_event_weights_into_accumulator(self, new_weights: Dict[str, Any]):
-            """Merge new per-event weights into accumulator (concatenate arrays)."""
-            acc = self.accumulator["event_weights"]
-            if isinstance(acc, dict) and not acc:
-                # First chunk: store as plain dict (numpy arrays)
-                merged = {}
+            """Save per-chunk event weights to a temp file.
+
+            Instead of storing plain Python dicts in the coffea accumulator
+            (which causes ``dict += dict`` TypeError during inter-worker
+            merging), we write each chunk's event weights to a temp pickle
+            file.  They are collected and concatenated in ``postprocess``.
+            """
+            if not self._temp_dir:
+                return
+            import os
+            import pickle
+            import time
+            import uuid
+            chunk_id = f"{int(time.time() * 1000000)}_{uuid.uuid4().hex[:8]}"
+            ew_file = os.path.join(self._temp_dir, f"ew_chunk_{chunk_id}.pkl")
+            try:
+                # Serialise: convert any non-ndarray values to ndarray
+                serialisable = {}
                 for k, v in new_weights.items():
                     if isinstance(v, dict):
-                        merged[k] = {kk: np.asarray(vv) for kk, vv in v.items() if isinstance(vv, np.ndarray)}
+                        serialisable[k] = {
+                            kk: np.asarray(vv)
+                            for kk, vv in v.items()
+                            if isinstance(vv, np.ndarray) or hasattr(vv, '__len__')
+                        }
                     elif isinstance(v, np.ndarray):
-                        merged[k] = v
-                    else:
-                        merged[k] = np.asarray(v)
-                self.accumulator["event_weights"] = merged
-                return
-            # Subsequent chunks: concatenate
-            merged = self.accumulator["event_weights"] if isinstance(self.accumulator["event_weights"], dict) else {}
-            for k, v in new_weights.items():
-                if isinstance(v, dict):
-                    if k not in merged:
-                        merged[k] = {}
-                    for kk, vv in v.items():
-                        if isinstance(vv, np.ndarray):
-                            merged[k][kk] = np.concatenate([merged[k][kk], vv]) if kk in merged[k] else vv
-                elif isinstance(v, np.ndarray):
-                    merged[k] = np.concatenate([merged[k], v]) if k in merged else v
-            self.accumulator["event_weights"] = merged
+                        serialisable[k] = v
+                    elif hasattr(v, '__len__'):
+                        serialisable[k] = np.asarray(v)
+                with open(ew_file, 'wb') as f:
+                    pickle.dump(serialisable, f, protocol=pickle.HIGHEST_PROTOCOL)
+                logging.debug(f"Saved event_weights chunk to {ew_file}")
+            except Exception as e:
+                logging.warning(f"Failed to save event_weights chunk: {e}")
+            # Keep the coffea accumulator entry as an empty dict_accumulator so
+            # coffea can merge it across workers without errors.
+            # (do NOT assign a plain dict here)
 
         def postprocess(self, accumulator: Dict[str, Any]) -> Dict[str, Any]:
             """Post-process results."""
@@ -996,6 +958,46 @@ if COFFEA_AVAILABLE:
                     chunk_files = []
 
             logging.info(f"postprocess called: event_selection_output={self.event_selection_output}, chunk_files={len(chunk_files)}")
+
+            # ── Merge event_weights from per-chunk temp files ─────────────────
+            if self._temp_dir and os.path.exists(self._temp_dir):
+                ew_files = sorted(
+                    os.path.join(self._temp_dir, f)
+                    for f in os.listdir(self._temp_dir)
+                    if f.startswith("ew_chunk_") and f.endswith(".pkl")
+                )
+                if ew_files:
+                    merged_ew: Dict[str, Any] = {}
+                    for ew_file in ew_files:
+                        try:
+                            with open(ew_file, 'rb') as f:
+                                chunk_ew = pickle.load(f)
+                            for k, v in chunk_ew.items():
+                                if isinstance(v, dict):
+                                    if k not in merged_ew:
+                                        merged_ew[k] = {}
+                                    for kk, vv in v.items():
+                                        if isinstance(vv, np.ndarray):
+                                            if kk in merged_ew[k]:
+                                                merged_ew[k][kk] = np.concatenate([merged_ew[k][kk], vv])
+                                            else:
+                                                merged_ew[k][kk] = vv
+                                elif isinstance(v, np.ndarray):
+                                    if k in merged_ew:
+                                        merged_ew[k] = np.concatenate([merged_ew[k], v])
+                                    else:
+                                        merged_ew[k] = v
+                        except Exception as e:
+                            logging.warning(f"Failed to load event_weights chunk {ew_file}: {e}")
+                    if merged_ew:
+                        accumulator["event_weights"] = merged_ew
+                        logging.info(f"Merged event_weights from {len(ew_files)} chunk files")
+                    # Clean up ew chunk files
+                    for ew_file in ew_files:
+                        try:
+                            os.remove(ew_file)
+                        except Exception:
+                            pass
 
             # Save accumulated event selection if requested
             if self.event_selection_output and chunk_files:
