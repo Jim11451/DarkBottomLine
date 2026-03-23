@@ -299,6 +299,14 @@ class DarkBottomLineProcessor:
         if outdir:
             os.makedirs(outdir, exist_ok=True)
 
+        # Auto-detect strict output intent from file extension.
+        # If user explicitly provides a .root target, enforce root-only output.
+        output_file_lower = output_file.lower()
+        if output_file_lower.endswith('.root'):
+            output_format = 'root'
+        elif output_file_lower.endswith('.pkl') and output_format not in ('root',):
+            output_format = 'pkl'
+
         # Determine actual output files based on format
         # For backward compatibility, pkl format saves both pickle and ROOT files
         save_pkl = output_format in ("pkl", "both")
@@ -463,6 +471,56 @@ class DarkBottomLineProcessor:
                 branches['n_taus'] = safe_num('taus')
                 branches['n_jets'] = safe_num('jets')
                 branches['n_bjets'] = safe_num('bjets')
+
+                # Add key object kinematics (jagged per-event branches where available)
+                def _add_object_branch(obj_key, field, branch_name):
+                    obj_arr = objects.get(obj_key)
+                    if obj_arr is None:
+                        return
+                    try:
+                        if hasattr(obj_arr, 'fields') and field in obj_arr.fields:
+                            branches[branch_name] = obj_arr[field]
+                    except Exception:
+                        pass
+
+                object_field_map = {
+                    'muons': {
+                        'pt': 'muon_pt',
+                        'eta': 'muon_eta',
+                        'phi': 'muon_phi',
+                    },
+                    'electrons': {
+                        'pt': 'electron_pt',
+                        'eta': 'electron_eta',
+                        'phi': 'electron_phi',
+                    },
+                    'jets': {
+                        'pt': 'jet_pt',
+                        'eta': 'jet_eta',
+                        'phi': 'jet_phi',
+                        'btagDeepFlavB': 'jet_btag',
+                    },
+                    'bjets': {
+                        'pt': 'bjet_pt',
+                        'eta': 'bjet_eta',
+                        'phi': 'bjet_phi',
+                    },
+                    'taus': {
+                        'pt': 'tau_pt',
+                        'eta': 'tau_eta',
+                        'phi': 'tau_phi',
+                    },
+                    'fatjets': {
+                        'pt': 'fatjet_pt',
+                        'eta': 'fatjet_eta',
+                        'phi': 'fatjet_phi',
+                        'mass': 'fatjet_mass',
+                    },
+                }
+
+                for object_key, field_map in object_field_map.items():
+                    for src_field, dst_branch in field_map.items():
+                        _add_object_branch(object_key, src_field, dst_branch)
 
                 # Add event weights if provided
                 if event_weights:
