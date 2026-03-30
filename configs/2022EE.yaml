@@ -1,12 +1,12 @@
-year: 2023
-lumi: 35.9  # fb^-1
+year: 2022
+lumi: 8.9  # fb^-1
 
 # Correction file paths (user must provide actual files)
 corrections:
-  pileup: data/corrections/pileup_2023.json.gz
-  btagSF: data/corrections/btagging_2023.json.gz
-  muonSF: data/corrections/muonSF_2023.json.gz
-  electronSF: data/corrections/electronSF_2023.json.gz
+  pileup: data/corrections/pileup_2022.json.gz
+  btagSF: data/corrections/btagging_2022.json.gz
+  muonSF: data/corrections/muonSF_2022.json.gz
+  electronSF: data/corrections/electronSF_2022.json.gz
 
 # Trigger paths
 triggers:
@@ -26,37 +26,29 @@ met_filters:
   - "Flag_eeBadScFilter"
   - "Flag_ecalBadCalibFilter"
 
-# Object selection (preselection: loose pt>10; region: tight pt>20, leading pt>30 in CRs)
+# Object selection cuts
 objects:
   muons:
     pt_min: 20.0
-    pt_min_loose: 10.0
     eta_max: 2.4
-    id_loose: "loose"
-    iso_loose: "loose"
-    id_tight: "tight"
-    iso_tight: "tight"
+    id: "tight"
+    iso: "tight"
 
   electrons:
     pt_min: 20.0
-    pt_min_loose: 10.0
     eta_max: 2.5
-    id_loose: "loose"
-    iso_loose: "loose"
-    id_tight: "tight"
-    iso_tight: "tight"
+    id: "tight"
+    iso: "tight"
 
   taus:
     pt_min: 20.0
-    pt_min_loose: 10.0
     eta_max: 2.3
-    id_loose: "loose"
-    id_tight: "tight"
+    id: "tight"
     decay_modes: [0, 1, 2, 10, 11]
 
   jets:
     pt_min: 30.0
-    eta_max: 2.5
+    eta_max: 2.4
     id: "tight"
 
   fatjets:
@@ -69,22 +61,21 @@ btagging:
   wp: "medium"  # loose, medium, tight
   algorithm: "deepJet"  # deepJet, deepCSV
 
-# Event selection (aligned with SUS-23-008)
+# Event selection
 event_selection:
   min_muons: 0
   max_muons: 2
   min_electrons: 0
   max_electrons: 2
   min_taus: 0
-  max_taus: 0
-  min_jets: 1
+  max_taus: 2
+  min_jets: 2
   min_bjets: 1
-  met_min: 250.0    # event passes if MET > 250 GeV or Recoil > 250 GeV
-  jet1_pt_min: 100.0
-  delta_phi_min: 0.5
+  met_min: 50.0
 
 # Cleaning parameters
 cleaning:
   dr_muon_jet: 0.4
   dr_electron_jet: 0.4
   dr_tau_jet: 0.4
+
