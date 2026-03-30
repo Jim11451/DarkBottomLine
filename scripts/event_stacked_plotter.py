@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import json
 import math
 import os
 import pickle
@@ -31,15 +32,116 @@ import uproot
 
 
 @dataclass
+class SubSampleData:
+    process: str
+    n_events: int
+    objects: Dict[str, Any]
+    cross_section: Optional[float] = None  # pb
+
+
+@dataclass
 class SampleData:
     name: str
     n_events: int
     objects: Dict[str, Any]
     luminosity: float = 1.0  # Luminosity normalization factor
+    cross_section: Optional[float] = None  # Cross-section in pb; None means no cross-section weighting
+    metadata_n_events_available: bool = True  # Whether n_events is from metadata (for ROOT inputs)
+    sub_samples: Optional[List[SubSampleData]] = None  # Optional per-process components for mixed-pt samples
 
 
 def _is_number(value: Any) -> bool:
     return isinstance(value, (int, float, np.integer, np.floating)) and not isinstance(value, bool)
+
+
+def _load_xsection_json(json_path: Path) -> Dict[str, List[Dict[str, Any]]]:
+    """Load cross-section data from JSON file.
+    
+    Expected format:
+    {
+        "ProcessName": [
+            {"year": "2022", "process": "...", "xsection": 123.45, ...},
+            ...
+        ],
+        ...
+    }
+    """
+    try:
+        with open(json_path, "r") as f:
+            data = json.load(f)
+        return data
+    except Exception as e:
+        print(f"Warning: Could not load cross-section JSON {json_path}: {e}")
+        return {}
+
+
+def _extract_xsection_by_year(
+    xsection_data: Dict[str, List[Dict[str, Any]]], 
+    sample_name: str,
+    year: str
+) -> Optional[float]:
+    """Extract cross-section (in pb) for a given sample and year.
+    
+    Searches for matching process in xsection_data and returns cross-section in pb.
+    Returns None if not found.
+    """
+    if not xsection_data:
+        return None
+    
+    # Try to find the process category from sample name
+    # Sample names are usually like: newDIBOSON_2022_EVENTSELECTION or newWtoLNU-2Jets_2022_EVENTSELECTION
+    # Remove prefixes and suffixes
+    sample_base = sample_name
+    if sample_base.startswith("new"):
+        sample_base = sample_base[3:]
+    # Remove year suffix and _EVENTSELECTION
+    import re as regex
+    sample_base = regex.sub(r"_20\d{2}(EE)?.*$", "", sample_base)
+    # Normalize case for matching (WtoLNu vs WtoLNU)
+    sample_base_lower = sample_base.lower()
+    
+    # Search in xsection_data for matching process
+    for process_category, entries in xsection_data.items():
+        # Try case-insensitive match for process category
+        if sample_base_lower == process_category.lower():
+            for entry in entries:
+                if entry.get("year") == year:
+                    xsec = entry.get("xsection")
+                    if xsec is not None:
+                        return float(xsec)  # Return in pb
+    return None
+
+
+def _build_xsection_process_lookup(
+    xsection_data: Dict[str, List[Dict[str, Any]]],
+    year: str,
+) -> Dict[str, float]:
+    """Build a mapping from full_dataset process name to cross-section in pb for a given year."""
+    process_to_xsec: Dict[str, float] = {}
+    for entries in xsection_data.values():
+        for entry in entries:
+            if entry.get("year") != year:
+                continue
+            full_dataset = entry.get("full_dataset")
+            xsec = entry.get("xsection")
+            if not full_dataset or xsec is None:
+                continue
+            process_to_xsec[str(full_dataset)] = float(xsec)
+    return process_to_xsec
+
+
+def _match_root_file_to_process(root_file_name: str, process_to_xsec: Dict[str, float]) -> Optional[Tuple[str, float]]:
+    """Match ROOT file name to JSON full_dataset key using longest-prefix match."""
+    stem = Path(root_file_name).stem
+    best_key: Optional[str] = None
+    for key in process_to_xsec.keys():
+        if stem.startswith(key):
+            if best_key is None or len(key) > len(best_key):
+                best_key = key
+    if best_key is None:
+        return None
+    return best_key, process_to_xsec[best_key]
+    
 
 
 def _merge_values(old_value: Any, new_value: Any) -> Any:
@@ -90,17 +192,21 @@ def _load_single_root(path: Path) -> Dict[str, Any]:
         
         # Get n_events from Metadata tree if available
         n_events = 0
+        metadata_n_events_available = False
         if "Metadata" in f:
             meta_tree = f["Metadata"]
             if "n_events" in meta_tree.keys():
                 n_events_arr = meta_tree["n_events"].array(library="np")
                 n_events = int(n_events_arr[0]) if len(n_events_arr) > 0 else 0
-        
-        # Fallback to counting entries if metadata not available
-        if n_events == 0:
-            n_events = tree.num_entries
-        
-        return {"n_events": n_events, "objects": objects}
+                metadata_n_events_available = n_events > 0
+
+        # Do not fallback to selected entries for MC normalization.
+        # If metadata is missing, keep n_events=0 and let caller decide whether to fail.
+        return {
+            "n_events": n_events,
+            "objects": objects,
+            "metadata_n_events_available": metadata_n_events_available,
+        }
 
 
 def _should_skip_pkl_file(path: Path) -> bool:
@@ -172,12 +278,15 @@ def merge_root_folder(folder: Path) -> Dict[str, Any]:
         raise FileNotFoundError(f"No .root files found in folder: {folder}")
 
     merged: Dict[str, Any] = {}
+    all_files_have_metadata_n_events = True
     total_files = len(root_files)
     print(f"Loading {total_files} ROOT files from {folder.name}...")
     
     for idx, root_path in enumerate(root_files, 1):
         try:
             data = _load_single_root(root_path)
+            if not data.get("metadata_n_events_available", False):
+                all_files_have_metadata_n_events = False
             merged = _merge_values(merged, data)
             
             # Progress indication every 50 files
@@ -188,6 +297,7 @@ def merge_root_folder(folder: Path) -> Dict[str, Any]:
 
     merged.setdefault("n_events", 0)
     merged.setdefault("objects", {})
+    merged["metadata_n_events_available"] = all_files_have_metadata_n_events
     if not isinstance(merged["objects"], dict):
         raise ValueError(f"Merged objects is not a dictionary in folder: {folder}")
 
@@ -330,13 +440,35 @@ def _make_bins(all_values: Sequence[np.ndarray], n_bins: int) -> Optional[np.nda
     return np.linspace(data_min, data_max, n_bins + 1)
 
 
-def _histogram(values: np.ndarray, bins: np.ndarray, n_events: int, luminosity: float = 1.0) -> np.ndarray:
-    """Create histogram normalized by n_events and scaled by luminosity."""
+def _histogram(values: np.ndarray, bins: np.ndarray, n_events: int, luminosity: float = 1.0, cross_section_pb: Optional[float] = None) -> np.ndarray:
+    """Create histogram normalized by n_events and scaled by luminosity and cross-section.
+    
+    Normalization formula:
+    - If cross_section_pb is provided: weight = (luminosity × cross_section_fb) / n_events
+      where cross_section_fb = cross_section_pb × 1000 (convert pb to fb)
+    - If cross_section_pb is None: weight = luminosity / n_events
+    """
     if values.size == 0 or n_events <= 0:
         return np.zeros(len(bins) - 1, dtype=float)
-    weights = np.full(values.shape[0], luminosity / float(n_events), dtype=float)
+    
+    if cross_section_pb is not None:
+        # Convert cross-section from pb to fb and apply
+        cross_section_fb = cross_section_pb * 1000.0
+        weight = (luminosity * cross_section_fb) / float(n_events)
+    else:
+        weight = luminosity / float(n_events)
+    
+    weights = np.full(values.shape[0], weight, dtype=float)
     hist, _ = np.histogram(values, bins=bins, weights=weights)
     return hist
+
+
+def _histogram_counts(values: np.ndarray, bins: np.ndarray) -> np.ndarray:
+    """Create raw-count histogram without normalization (for data)."""
+    if values.size == 0:
+        return np.zeros(len(bins) - 1, dtype=float)
+    hist, _ = np.histogram(values, bins=bins)
+    return hist.astype(float)
 
 
 def _simplify_sample_label(sample_name: str) -> str:
@@ -346,6 +478,33 @@ def _simplify_sample_label(sample_name: str) -> str:
     label = re.sub(r"_20\d{2}(EE)?_.*$", "", label)
     label = re.sub(r"_EVENTSELECTION$", "", label)
     return label
+
+
+def _get_background_color_map(sample_names: Sequence[str]) -> Dict[str, str]:
+    palette = {
+        "DIBOSON": "#4E79A7",
+        "DYto2L-2Jets": "#59A14F",
+        "Top": "#E15759",
+        "WtoLNU-2Jets": "#F28E2B",
+        "Zto2Nu-2Jets": "#B07AA1",
+        "QCD": "#9C755F",
+        "GJets": "#76B7B2",
+        "SMH": "#EDC948",
+    }
+    fallback_palette = [
+        "#4E79A7", "#F28E2B", "#59A14F", "#E15759", "#B07AA1",
+        "#76B7B2", "#9C755F", "#EDC948", "#FF9DA7", "#BAB0AC",
+    ]
+
+    color_map: Dict[str, str] = {}
+    fallback_idx = 0
+    for raw_name in sorted({_simplify_sample_label(name) for name in sample_names}):
+        if raw_name in palette:
+            color_map[raw_name] = palette[raw_name]
+        else:
+            color_map[raw_name] = fallback_palette[fallback_idx % len(fallback_palette)]
+            fallback_idx += 1
+    return color_map
 
 
 def _variable_unit(variable: str) -> str:
@@ -372,6 +531,7 @@ def _plot_stacked_variable(
     data_hist: Optional[np.ndarray],
     output_dir: Path,
     luminosity: float = 1.0,
+    color_map: Optional[Dict[str, str]] = None,
 ) -> Path:
     background_hists = [(_simplify_sample_label(label), hist) for label, hist in background_hists]
     background_hists = sorted(background_hists, key=lambda item: float(np.sum(item[1])))
@@ -386,38 +546,42 @@ def _plot_stacked_variable(
     plt.rcParams['legend.fontsize'] = 10
     plt.rcParams['lines.linewidth'] = 1.5
 
-    # Use CMS color palette (Pastel colors for backgrounds)
-    cms_colors = [
-        '#1f77b4',  # blue
-        '#ff7f0e',  # orange
-        '#2ca02c',  # green
-        '#d62728',  # red
-        '#9467bd',  # purple
-        '#8c564b',  # brown
-        '#e377c2',  # pink
-        '#7f7f7f',  # gray
-        '#bcbd22',  # olive
-        '#17becf',  # cyan
-    ]
+    if color_map is None:
+        color_map = _get_background_color_map([label for label, _ in background_hists])
     
     fig, ax = plt.subplots(figsize=(10, 7))
     fig.subplots_adjust(top=0.91, bottom=0.12, left=0.11, right=0.97)
     
     cumulative = np.zeros(len(bins) - 1, dtype=float)
-    for idx, (label, hist_values) in enumerate(background_hists):
+    for label, hist_values in background_hists:
         next_cumulative = cumulative + hist_values
-        color = cms_colors[idx % len(cms_colors)]
+        color = color_map.get(label, "#4E79A7")
         ax.stairs(next_cumulative, bins, baseline=cumulative, fill=True, alpha=0.8, 
              linewidth=0.5, color=color, label=label, edgecolor='white')
         cumulative = next_cumulative
 
     if data_hist is not None:
-        ax.stairs(data_hist, bins, color="black", linewidth=2.5, label="Data", fill=False)
+        centers = 0.5 * (bins[:-1] + bins[1:])
+        half_width = 0.5 * (bins[1:] - bins[:-1])
+        mask = data_hist > 0
+        if np.any(mask):
+            ax.errorbar(
+                centers[mask],
+                data_hist[mask],
+                xerr=half_width[mask],
+                yerr=np.sqrt(data_hist[mask]),
+                fmt="k_",
+                markersize=10,
+                elinewidth=1.1,
+                capsize=0,
+                label="Data",
+                zorder=10,
+            )
 
     ax.set_yscale("log")
     ax.set_ylim(bottom=1e-6)
     ax.set_xlabel(variable, fontsize=12, fontweight='normal')
-    ax.set_ylabel("Events × lumi / n_events", fontsize=12, fontweight='normal')
+    ax.set_ylabel("MC: Events × lumi / n_events, Data: Events", fontsize=12, fontweight='normal')
 
     # CMS header (outside plotting region)
     fig.text(0.11, 0.945, "CMS", fontsize=14, fontweight="bold", ha="left", va="top")
@@ -453,6 +617,9 @@ def _load_sample_from_folder(
     luminosity: float = 1.0,
     file_type: Literal["auto", "pkl", "root"] = "auto",
     target_variables: Optional[Sequence[str]] = None,
+    xsection_data: Optional[Dict[str, List[Dict[str, Any]]]] = None,
+    year: Optional[str] = None,
+    is_data: bool = False,
 ) -> SampleData:
     """Load sample from folder with configurable file-type selection."""
     root_files = [p for p in folder.glob("*.root") if p.is_file()]
@@ -476,9 +643,104 @@ def _load_sample_from_folder(
     
     n_events = int(merged.get("n_events", 0) or 0)
     objects = merged.get("objects", {})
+    metadata_n_events_available = bool(merged.get("metadata_n_events_available", True))
     if not isinstance(objects, dict):
         raise ValueError(f"objects is not a dictionary for folder: {folder}")
-    return SampleData(name=folder.name, n_events=n_events, objects=objects, luminosity=luminosity)
+
+    # Build per-process sub-samples for ROOT inputs so each pt bin uses its own cross-section.
+    sub_samples: Optional[List[SubSampleData]] = None
+    if root_files and xsection_data and year and not is_data:
+        process_to_xsec = _build_xsection_process_lookup(xsection_data, year)
+        per_process_merged: Dict[str, Dict[str, Any]] = {}
+        unmatched_files: List[str] = []
+
+        for root_file in sorted(root_files):
+            match = _match_root_file_to_process(root_file.name, process_to_xsec)
+            if match is None:
+                unmatched_files.append(root_file.name)
+                continue
+            process_key, xsec_pb = match
+            loaded = _load_single_root(root_file)
+            group = per_process_merged.get(process_key)
+            if group is None:
+                group = {
+                    "n_events": 0,
+                    "objects": {},
+                    "metadata_n_events_available": True,
+                    "cross_section": xsec_pb,
+                }
+                per_process_merged[process_key] = group
+            if not loaded.get("metadata_n_events_available", False):
+                group["metadata_n_events_available"] = False
+            group["n_events"] = int(group.get("n_events", 0) or 0) + int(loaded.get("n_events", 0) or 0)
+            group["objects"] = _merge_values(group.get("objects", {}), loaded.get("objects", {}))
+
+        if unmatched_files:
+            raise ValueError(
+                f"Could not match {len(unmatched_files)} ROOT files in {folder.name} to JSON full_dataset keys. "
+                f"Example: {unmatched_files[0]}"
+            )
+
+        sub_samples = []
+        print(f"Process-xsection mapping for {folder.name} ({year}):")
+        for process_key in sorted(per_process_merged.keys()):
+            group = per_process_merged[process_key]
+            group_n_events = int(group.get("n_events", 0) or 0)
+            group_xsec = float(group.get("cross_section", 0.0))
+            print(f"  {process_key} -> xsec={group_xsec:.6g} pb, n_events={group_n_events}")
+            if group_n_events <= 0:
+                raise ValueError(
+                    f"Invalid n_events={group_n_events} for sub-sample {process_key} in {folder.name}."
+                )
+            if not bool(group.get("metadata_n_events_available", True)):
+                raise ValueError(
+                    f"Sub-sample {process_key} in {folder.name} has ROOT file(s) without Metadata.n_events."
+                )
+            sub_samples.append(
+                SubSampleData(
+                    process=process_key,
+                    n_events=group_n_events,
+                    objects=group.get("objects", {}),
+                    cross_section=group_xsec,
+                )
+            )
+    
+    # Extract cross-section if data available and year is provided
+    cross_section_pb = None
+    if xsection_data and year:
+        cross_section_pb = _extract_xsection_by_year(xsection_data, folder.name, year)
+        if cross_section_pb is not None:
+            print(f"Found cross-section for {folder.name} ({year}): {cross_section_pb:.4f} pb")
+
+    # Enforce strict MC normalization:
+    # 1) n_events must come from metadata for ROOT-based samples
+    # 2) when xsection mode is enabled, MC sample must have a matched cross-section
+    if not is_data:
+        if root_files and not metadata_n_events_available:
+            raise ValueError(
+                f"Sample {folder.name} is missing Metadata.n_events in one or more ROOT files. "
+                "Refusing to normalize MC with selected-entry fallback."
+            )
+        if xsection_data and year and cross_section_pb is None:
+            raise ValueError(
+                f"No cross-section found for MC sample {folder.name} in year {year}. "
+                "Cannot apply strict MC normalization."
+            )
+        if n_events <= 0:
+            raise ValueError(
+                f"Invalid n_events={n_events} for MC sample {folder.name}. "
+                "Expected positive total generated events from metadata."
+            )
+    
+    return SampleData(
+        name=folder.name,
+        n_events=n_events,
+        objects=objects,
+        luminosity=luminosity,
+        cross_section=cross_section_pb,
+        metadata_n_events_available=metadata_n_events_available,
+        sub_samples=sub_samples,
+    )
 
 
 def run_plotting(
@@ -490,22 +752,61 @@ def run_plotting(
     max_variables: Optional[int] = None,
     luminosity: float = 1.0,
     file_type: Literal["auto", "pkl", "root"] = "auto",
+    xsection_json_path: Optional[Path] = None,
+    year: Optional[str] = None,
 ) -> List[Path]:
     if not background_folders:
         raise ValueError("At least one background folder is required")
 
+    # Load cross-section data if provided
+    xsection_data = None
+    if xsection_json_path:
+        xsection_data = _load_xsection_json(xsection_json_path)
+        print(f"Loaded cross-section data from: {xsection_json_path}")
+
     bkg_samples = [
-        _load_sample_from_folder(folder, luminosity, file_type=file_type, target_variables=variables)
+        _load_sample_from_folder(
+            folder,
+            luminosity,
+            file_type=file_type,
+            target_variables=variables,
+            xsection_data=xsection_data,
+            year=year,
+            is_data=False,
+        )
         for folder in background_folders
     ]
     data_sample = (
-        _load_sample_from_folder(data_folder, luminosity, file_type=file_type, target_variables=variables)
+        _load_sample_from_folder(
+            data_folder,
+            luminosity,
+            file_type=file_type,
+            target_variables=variables,
+            xsection_data=xsection_data,
+            year=year,
+            is_data=True,
+        )
         if data_folder
         else None
     )
 
     bkg_dist_by_sample = {sample.name: _extract_object_distributions(sample.objects) for sample in bkg_samples}
     data_dist = _extract_object_distributions(data_sample.objects) if data_sample else {}
+
+    print("MC normalization summary:")
+    for sample in bkg_samples:
+        if sample.cross_section is not None:
+            event_weight = (sample.luminosity * sample.cross_section * 1000.0) / float(sample.n_events)
+            print(
+                f"  {sample.name}: n_events={sample.n_events}, lumi={sample.luminosity} fb^-1, "
+                f"xsec={sample.cross_section:.6g} pb, event_weight={event_weight:.6g}"
+            )
+        else:
+            event_weight = sample.luminosity / float(sample.n_events) if sample.n_events > 0 else 0.0
+            print(
+                f"  {sample.name}: n_events={sample.n_events}, lumi={sample.luminosity} fb^-1, "
+                f"xsec=None, fallback_event_weight={event_weight:.6g}"
+            )
 
     variable_names: set[str] = set()
     for dist in bkg_dist_by_sample.values():
@@ -519,6 +820,8 @@ def run_plotting(
 
     if max_variables is not None:
         selected_vars = selected_vars[:max_variables]
+
+    color_map = _get_background_color_map([sample.name for sample in bkg_samples])
 
     created_files: List[Path] = []
     for variable in selected_vars:
@@ -535,10 +838,25 @@ def run_plotting(
 
         bkg_hists: List[Tuple[str, np.ndarray]] = []
         for sample in bkg_samples:
-            sample_dist = bkg_dist_by_sample.get(sample.name, {})
-            values = sample_dist.get(variable, np.array([], dtype=float))
-            values = _apply_variable_plot_filter(variable, values)
-            hist_values = _histogram(values, bins, sample.n_events, sample.luminosity)
+            if sample.sub_samples:
+                # Mixed-pt folders are summed from per-process components, each with its own xsec.
+                hist_values = np.zeros(len(bins) - 1, dtype=float)
+                for sub in sample.sub_samples:
+                    sub_dist = _extract_object_distributions(sub.objects)
+                    values = sub_dist.get(variable, np.array([], dtype=float))
+                    values = _apply_variable_plot_filter(variable, values)
+                    hist_values += _histogram(
+                        values,
+                        bins,
+                        sub.n_events,
+                        sample.luminosity,
+                        cross_section_pb=sub.cross_section,
+                    )
+            else:
+                sample_dist = bkg_dist_by_sample.get(sample.name, {})
+                values = sample_dist.get(variable, np.array([], dtype=float))
+                values = _apply_variable_plot_filter(variable, values)
+                hist_values = _histogram(values, bins, sample.n_events, sample.luminosity, cross_section_pb=sample.cross_section)
             bkg_hists.append((sample.name, hist_values))
 
         if np.allclose(sum(hist for _, hist in bkg_hists), 0.0):
@@ -548,9 +866,17 @@ def run_plotting(
         if data_sample is not None:
             values = data_dist.get(variable, np.array([], dtype=float))
             values = _apply_variable_plot_filter(variable, values)
-            data_hist = _histogram(values, bins, data_sample.n_events, data_sample.luminosity)
+            data_hist = _histogram_counts(values, bins)
 
-        out_path = _plot_stacked_variable(variable, bins, bkg_hists, data_hist, output_dir, luminosity)
+        out_path = _plot_stacked_variable(
+            variable,
+            bins,
+            bkg_hists,
+            data_hist,
+            output_dir,
+            luminosity,
+            color_map=color_map,
+        )
         created_files.append(out_path)
 
     return created_files
@@ -579,6 +905,18 @@ def _parse_args() -> argparse.Namespace:
         default="auto",
         help="Input file type selection for each sample folder (default: auto).",
     )
+    parser.add_argument(
+        "--xsection-json",
+        type=Path,
+        default=None,
+        help="(Optional) Path to JSON file containing cross-section data for samples.",
+    )
+    parser.add_argument(
+        "--year",
+        type=str,
+        default=None,
+        help="(Optional) Year to use for cross-section lookup (e.g., 2022, 2022EE, 2023).",
+    )
     return parser.parse_args()
 
 
@@ -593,6 +931,8 @@ def main() -> None:
         max_variables=args.max_variables,
         luminosity=args.lumi,
         file_type=args.file_type,
+        xsection_json_path=args.xsection_json,
+        year=args.year,
     )
     print(f"Created {len(output_paths)} stacked plot(s)")
     if args.data_folder:

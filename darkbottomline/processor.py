@@ -458,6 +458,34 @@ class DarkBottomLineProcessor:
                 branches['PFMET_phi'] = _get_met_field_array('PFMET_phi', 'MET_phi')
                 branches['PFMET_significance'] = _get_met_field_array('PFMET_significance', 'MET_significance')
 
+                # Recoil (event-level scalar)
+                try:
+                    met_pt = events['PFMET_pt'] if 'PFMET_pt' in events.fields else events['MET_pt']
+                    met_phi = events['PFMET_phi'] if 'PFMET_phi' in events.fields else events['MET_phi']
+
+                    # Use tight pt>30 leptons for CR-consistent recoil definition
+                    muons = objects.get('tight_muons_pt30', ak.Array([]))
+                    electrons = objects.get('tight_electrons_pt30', ak.Array([]))
+
+                    lep_px = ak.zeros_like(met_pt)
+                    lep_py = ak.zeros_like(met_pt)
+                    try:
+                        if len(ak.flatten(muons)) > 0:
+                            lep_px = lep_px + ak.sum(muons.pt * np.cos(muons.phi), axis=1)
+                            lep_py = lep_py + ak.sum(muons.pt * np.sin(muons.phi), axis=1)
+                        if len(ak.flatten(electrons)) > 0:
+                            lep_px = lep_px + ak.sum(electrons.pt * np.cos(electrons.phi), axis=1)
+                            lep_py = lep_py + ak.sum(electrons.pt * np.sin(electrons.phi), axis=1)
+                    except (Exception, BaseException):
+                        pass
+
+                    recoil_px = -(met_pt * np.cos(met_phi) + lep_px)
+                    recoil_py = -(met_pt * np.sin(met_phi) + lep_py)
+                    recoil = np.sqrt(recoil_px**2 + recoil_py**2)
+                    branches['recoil'] = ak.to_numpy(ak.fill_none(recoil, 0.0))
+                except Exception:
+                    branches['recoil'] = np.zeros(len(events), dtype=float)
+
                 # Object multiplicities
                 def safe_num(obj_key):
                     arr = objects.get(obj_key, ak.Array([]))
