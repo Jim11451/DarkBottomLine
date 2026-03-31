@@ -393,9 +393,11 @@ def build_objects(events: ak.Array, config: Dict[str, Any]) -> Dict[str, Any]:
     jet_mask = select_jets(events, config["objects"]["jets"])
     print(f"    Jets selected: {ak.sum(jet_mask)}")
 
-    print("  Selecting fat jets...")
-    fatjet_mask = select_fatjets(events, config["objects"]["fatjets"])
-    print(f"    Fat jets selected: {ak.sum(fatjet_mask)}")
+    # Fat jets disabled — uncomment to re-enable
+    # print("  Selecting fat jets...")
+    # fatjet_mask = select_fatjets(events, config["objects"]["fatjets"])
+    # print(f"    Fat jets selected: {ak.sum(fatjet_mask)}")
+    fatjet_mask = ak.zeros_like(events["FatJet_pt"], dtype=bool)  # empty mask placeholder
 
     # Build collections from flat branches (kinematics + ID + charge for Z CR)
     muon_fields = {
@@ -444,12 +446,15 @@ def build_objects(events: ak.Array, config: Dict[str, Any]) -> Dict[str, Any]:
         jet_fields["hadronFlavour"] = events["Jet_partonFlavour"]
     jets = ak.zip(jet_fields)
 
-    fatjets = ak.zip({
-        "pt": events["FatJet_pt"],
-        "eta": events["FatJet_eta"],
-        "phi": events["FatJet_phi"],
-        "mass": events["FatJet_mass"],
-    })
+    # Fat jets disabled — uncomment to re-enable
+    # fatjets = ak.zip({
+    #     "pt": events["FatJet_pt"],
+    #     "eta": events["FatJet_eta"],
+    #     "phi": events["FatJet_phi"],
+    #     "mass": events["FatJet_mass"],
+    # })
+    fatjets = ak.zip({"pt": events["FatJet_pt"], "eta": events["FatJet_eta"],
+                      "phi": events["FatJet_phi"], "mass": events["FatJet_mass"]})
 
     # Apply masks: main collections = loose (for event selection, jet cleaning)
     selected_muons = muons[muon_mask]
@@ -474,7 +479,7 @@ def build_objects(events: ak.Array, config: Dict[str, Any]) -> Dict[str, Any]:
     )
 
     selected_jets = jets[jet_mask]
-    selected_fatjets = fatjets[fatjet_mask]
+    selected_fatjets = fatjets[fatjet_mask]  # always empty while fat jets are disabled
 
     # Clean jets from leptons
     print("  Cleaning jets from leptons...")

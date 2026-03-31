@@ -150,7 +150,10 @@ class DarkBottomLineProcessor:
         if event_selection_output:
             try:
                 logging.info(f"Saving event-level selection to {event_selection_output} ({len(selected_events)} events)")
-                self._save_event_selection(event_selection_output, selected_events, selected_objects, max_events=self.config.get("max_events"))
+                self._save_event_selection(event_selection_output, selected_events, selected_objects,
+                                           max_events=self.config.get("max_events"),
+                                           n_events_total=len(events),
+                                           h_total_weight=h_total_weight)
                 # Verify file was created
                 import os
                 if os.path.exists(event_selection_output):
@@ -268,8 +271,9 @@ class DarkBottomLineProcessor:
 
         return skimmed
 
-    def _save_event_selection(self, output_file: str, events: ak.Array, objects: Dict[str, Any], 
+    def _save_event_selection(self, output_file: str, events: ak.Array, objects: Dict[str, Any],
                               max_events: Optional[int] = None, n_events_total: Optional[int] = None,
+                              h_total_weight: Optional[float] = None,
                               event_weights: Optional[Dict[str, Any]] = None, output_format: str = "pkl"):
         """
         Save selected events and corresponding objects to a file.
@@ -570,6 +574,8 @@ class DarkBottomLineProcessor:
                             'n_events': np.array([n_events_total], dtype=np.int64),
                             'n_selected_events': np.array([len(events)], dtype=np.int64),
                         }
+                        if h_total_weight is not None:
+                            metadata_dict['h_total_weight'] = np.array([h_total_weight], dtype=np.float64)
                         f['Metadata'] = metadata_dict
                         logging.info(f"Added n_events={n_events_total} to ROOT file metadata")
 

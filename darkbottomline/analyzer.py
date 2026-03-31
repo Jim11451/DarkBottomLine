@@ -167,6 +167,9 @@ class DarkBottomLineAnalyzer:
                 logging.error("Region manager not initialized and no event_selection_output provided. Cannot process events.")
                 raise ValueError("Region manager must be initialized or event_selection_output must be provided")
 
+        # Compute h_total_weight from raw events before any selection
+        h_total_weight = self.base_processor.correction_manager.get_h_total_weight(events)
+
         # Build physics objects
         logging.info("Building physics objects...")
         objects = build_objects(events, self.base_processor.config)
@@ -210,9 +213,10 @@ class DarkBottomLineAnalyzer:
             try:
                 logging.info(f"Saving event-selected (with weights) to {event_selection_output} ({len(events)} events)")
                 self.base_processor._save_event_selection(
-                    event_selection_output, events, objects, 
+                    event_selection_output, events, objects,
                     max_events=self.base_processor.config.get("max_events"),
                     n_events_total=n_events_total,
+                    h_total_weight=h_total_weight,
                     event_weights=event_weights_save,
                     output_format=output_format
                 )
@@ -741,6 +745,7 @@ if COFFEA_AVAILABLE:
             self.regions_config_path = regions_config_path
             self.event_selection_output = event_selection_output
             self.n_events_total = n_events_total  # Total events before selection
+            self.h_total_weight = None  # Set on first chunk in process()
             self.event_selection_only = event_selection_only
             self.max_events = max_events  # Maximum events to process
             self.processed_events = 0  # Track number of events processed
@@ -814,9 +819,13 @@ if COFFEA_AVAILABLE:
             # Track processed events
             self.processed_events += len(events_to_process)
             logging.info(f"Processing {len(events_to_process)} events (total processed: {self.processed_events}/{self.max_events if self.max_events else 'unlimited'})")
-            
+
+            # Accumulate h_total_weight across chunks
+            chunk_h = self.analyzer.base_processor.correction_manager.get_h_total_weight(events_to_process)
+            self.h_total_weight = (self.h_total_weight or 0.0) + chunk_h
+
             # Call analyzer.process() with appropriate parameters
-            # In event_selection_only mode, analyzer will skip region analysis  
+            # In event_selection_only mode, analyzer will skip region analysis
             result = self.analyzer.process(
                 events_to_process, 
                 event_selection_output=self.event_selection_output if self.event_selection_only else None,
@@ -1036,9 +1045,10 @@ if COFFEA_AVAILABLE:
                         # Save using base processor helper
                         logging.info(f"Saving accumulated event-level selection to {self.event_selection_output}")
                         self.analyzer.base_processor._save_event_selection(
-                            self.event_selection_output, all_selected_events, all_selected_objects, 
+                            self.event_selection_output, all_selected_events, all_selected_objects,
                             max_events=self.config.get("max_events"),
                             n_events_total=self.n_events_total,
+                            h_total_weight=self.h_total_weight,
                             output_format=self.output_format
                         )
                         # Verify file was created
