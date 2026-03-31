@@ -62,6 +62,24 @@ def _event_weights_flat_columns(event_weights: Dict[str, Any]) -> Dict[str, np.n
     return cols
 
 
+def _flatten_metadata(metadata: Dict[str, Any]) -> Dict[str, np.ndarray]:
+    """
+    Convert the metadata dict to a flat dict of single-element numpy arrays
+    suitable for writing as a ROOT tree or parquet file-level metadata.
+    Nested dicts (e.g. weight_statistics) are flattened with underscore-joined keys.
+    """
+    out = {}
+    for key, val in metadata.items():
+        if isinstance(val, dict):
+            for subkey, subval in val.items():
+                out[f"{key}_{subkey}"] = np.array([subval], dtype=np.float64)
+        elif isinstance(val, (int, np.integer)):
+            out[key] = np.array([val], dtype=np.int64)
+        elif isinstance(val, (float, np.floating)):
+            out[key] = np.array([val], dtype=np.float64)
+    return out
+
+
 class DarkBottomLineProcessor:
     """
     Main processor class for DarkBottomLine analysis.
@@ -588,8 +606,9 @@ class DarkBottomLineProcessor:
             self._save_pickle(output_file)
 
     def _save_parquet(self, output_file: str):
-        """Save results as Parquet file (histograms + per-event weights)."""
+        """Save results as Parquet file (histograms + per-event weights + metadata)."""
         import pandas as pd
+        import json
 
         # Histogram data
         data = {}
@@ -607,6 +626,15 @@ class DarkBottomLineProcessor:
                 data[k] = v
 
         df = pd.DataFrame(data)
+
+        # Metadata as parquet file-level key-value pairs (scalars only)
+        metadata = self.accumulator.get("metadata", {})
+        if metadata:
+            flat_meta = _flatten_metadata(metadata)
+            existing = df.attrs if hasattr(df, "attrs") else {}
+            existing.update({k: float(v[0]) for k, v in flat_meta.items()})
+            df.attrs = existing
+
         df.to_parquet(output_file)
         logging.info(f"Saved results to {output_file}")
 
@@ -620,8 +648,10 @@ class DarkBottomLineProcessor:
                     if hasattr(hist, 'values'):
                         f[name] = hist
 
-                # Save metadata
-                f["metadata"] = self.accumulator["metadata"]
+                # Save metadata as a flat single-entry TTree
+                metadata = self.accumulator.get("metadata", {})
+                if metadata:
+                    f["metadata"] = _flatten_metadata(metadata)
 
                 # Per-event weights as TTree (flat columns)
                 event_weights = self.accumulator.get("event_weights", {})
