@@ -28,6 +28,37 @@ except ImportError:
     COFFEA_AVAILABLE = False
 
 
+class _BoostHistAccumulator:
+    """Thin accumulator wrapper for hist.Hist / boost_histogram objects.
+
+    coffea's dict_accumulator.add() requires every leaf value to implement
+    .identity() (returns a zero-valued copy) and __iadd__. hist.Hist has
+    __iadd__ but not .identity(), so it cannot be stored directly in a
+    dict_accumulator that is merged across futures/dask workers.
+    """
+
+    def __init__(self, h: Any) -> None:
+        self._h = h
+
+    def identity(self) -> "_BoostHistAccumulator":
+        import copy
+        h_copy = copy.deepcopy(self._h)
+        h_copy.reset()
+        return _BoostHistAccumulator(h_copy)
+
+    def add(self, other: "_BoostHistAccumulator") -> None:
+        if isinstance(other, _BoostHistAccumulator):
+            self._h += other._h
+
+    def __iadd__(self, other: "_BoostHistAccumulator") -> "_BoostHistAccumulator":
+        self.add(other)
+        return self
+
+    @property
+    def value(self) -> Any:
+        return self._h
+
+
 class DarkBottomLineAnalyzer:
     """
     Multi-region analyzer extending the base processor.
@@ -877,35 +908,55 @@ if COFFEA_AVAILABLE:
             # If event_selection_only mode is enabled, don't merge results (no region analysis was done)
             if self.event_selection_only:
                 logging.info("event_selection_only mode: skipping accumulator merge (no region analysis)")
-                # Return the accumulator as-is for Coffea to merge properly
-                # The accumulator already has all required keys with dict_accumulator types
                 return self.accumulator
-            
-            # Update accumulator with results from normal analysis.
-            # Important: convert nested Python dicts recursively into
-            # dict_accumulator to avoid Coffea inter-worker dict += dict errors.
-            if "regions" in result and isinstance(result["regions"], dict):
-                self.accumulator["regions"].add(self._to_dict_accumulator(result["regions"]))
-            if "region_histograms" in result and isinstance(result["region_histograms"], dict):
-                self.accumulator["region_histograms"].add(self._to_dict_accumulator(result["region_histograms"]))
-            if "region_cutflow" in result and isinstance(result["region_cutflow"], dict):
-                self.accumulator["region_cutflow"].add(self._to_dict_accumulator(result["region_cutflow"]))
-            if "region_validation" in result and isinstance(result["region_validation"], dict):
-                self.accumulator["region_validation"].add(self._to_dict_accumulator(result["region_validation"]))
-            if "metadata" in result:
-                self.accumulator["metadata"].update(result.get("metadata", {}))
-            # Merge event_weights (concatenate arrays across chunks)
+
+            # Save region analysis results to a temp file instead of merging via coffea's
+            # dict_accumulator.add(). coffea's accumulator requires every leaf value to
+            # implement .identity(), which plain int/float/str/None/hist.Hist do not. This
+            # causes AttributeError when multiple workers merge accumulators (futures/dask).
+            # The same pattern is already used for event_weights and event_selection output.
+            if self._temp_dir:
+                self._save_analysis_result_to_temp(result, chunk_h=chunk_h)
+
+            # event_weights still go through the temp-file mechanism
             if "event_weights" in result and result["event_weights"]:
                 self._merge_event_weights_into_accumulator(result["event_weights"])
             return self.accumulator
 
         def _to_dict_accumulator(self, value: Any):
-            """Recursively convert nested dicts to coffea dict_accumulator."""
+            """Recursively convert nested dicts to coffea dict_accumulator.
+
+            ALL leaf values must be wrapped in a coffea accumulator type —
+            otherwise dict_accumulator.add() calls value.identity() on new
+            keys, which fails for plain Python int/float/str/None (no identity
+            method). This is only triggered when multiple workers merge
+            accumulators (futures/dask on lxplus), not in single-process runs.
+            """
             if isinstance(value, dict):
                 return processor.dict_accumulator(
                     {k: self._to_dict_accumulator(v) for k, v in value.items()}
                 )
-            return value
+            # bool must be checked before int (bool is a subclass of int)
+            if isinstance(value, bool):
+                return processor.value_accumulator(int, int(value))
+            if isinstance(value, (int, np.integer)):
+                return processor.value_accumulator(int, int(value))
+            if isinstance(value, (float, np.floating)):
+                return processor.value_accumulator(float, float(value))
+            if isinstance(value, np.ndarray):
+                return processor.list_accumulator(value.tolist())
+            if isinstance(value, list):
+                return processor.list_accumulator(value)
+            # hist.Hist / boost_histogram objects: have __iadd__ but no .identity().
+            # Wrap in _BoostHistAccumulator so coffea can merge them across workers.
+            if hasattr(value, "axes") and hasattr(value, "__iadd__"):
+                return _BoostHistAccumulator(value)
+            # str, None, and other types: use a 0-valued int accumulator as a
+            # safe no-op placeholder so identity() and add() don't crash.
+            # These fields (dnn_scores=None, region_name=str) are metadata
+            # that should not be summed; they are retrieved from non-accumulated
+            # paths (e.g. postprocess chunk files) instead.
+            return processor.value_accumulator(int, 0)
 
         def _merge_event_weights_into_accumulator(self, new_weights: Dict[str, Any]):
             """Save per-chunk event weights to a temp file.
@@ -946,6 +997,133 @@ if COFFEA_AVAILABLE:
             # coffea can merge it across workers without errors.
             # (do NOT assign a plain dict here)
 
+        def _save_analysis_result_to_temp(self, result: Dict[str, Any], chunk_h: float = 0.0) -> None:
+            """Save per-chunk analysis results (regions, histograms, etc.) to a temp file.
+
+            Bypasses coffea's accumulator type system entirely. hist.Hist and plain
+            Python scalars are picklable; they just can't satisfy coffea's .identity()
+            requirement. Merging is done manually in postprocess().
+            """
+            import os, pickle, time, uuid
+            chunk_id = f"{int(time.time() * 1000000)}_{uuid.uuid4().hex[:8]}"
+            result_file = os.path.join(self._temp_dir, f"analysis_chunk_{chunk_id}.pkl")
+            payload = {k: result[k] for k in ("regions", "region_histograms",
+                                               "region_cutflow", "region_validation",
+                                               "metadata") if k in result}
+            payload["h_total_weight"] = float(chunk_h)
+            try:
+                with open(result_file, "wb") as f:
+                    pickle.dump(payload, f, protocol=pickle.HIGHEST_PROTOCOL)
+                logging.debug(f"Saved analysis chunk to {result_file}")
+            except Exception as e:
+                logging.warning(f"Failed to save analysis chunk to temp file: {e}")
+
+        def _merge_analysis_chunks(self, result_files: list) -> Dict[str, Any]:
+            """Load and merge per-chunk analysis results from temp pkl files."""
+            import pickle
+            merged: Dict[str, Any] = {
+                "regions": {},
+                "region_histograms": {},
+                "region_cutflow": {"total_events": 0, "regions": {}},
+                "region_validation": {"status": "completed", "regions": {},
+                                      "overlaps": {}, "warnings": []},
+                "metadata": {"n_events_processed": 0, "n_regions": 0,
+                             "processing_time": 0.0},
+                "h_total_weight": 0.0,
+            }
+            for rf in sorted(result_files):
+                try:
+                    with open(rf, "rb") as f:
+                        chunk = pickle.load(f)
+                except Exception as e:
+                    logging.warning(f"Failed to load analysis chunk {rf}: {e}")
+                    continue
+
+                # regions: sum n_events; concatenate per-event variable arrays
+                for region, data in chunk.get("regions", {}).items():
+                    if region not in merged["regions"]:
+                        merged["regions"][region] = {
+                            "n_events": 0, "variables": {},
+                            "dnn_scores": None, "region_name": region,
+                        }
+                    merged["regions"][region]["n_events"] += int(data.get("n_events", 0))
+                    for var, val in data.get("variables", {}).items():
+                        if var not in merged["regions"][region]["variables"]:
+                            merged["regions"][region]["variables"][var] = val
+                        else:
+                            ex = merged["regions"][region]["variables"][var]
+                            try:
+                                if isinstance(ex, np.ndarray) and isinstance(val, np.ndarray):
+                                    merged["regions"][region]["variables"][var] = np.concatenate([ex, val])
+                                elif isinstance(ex, list) and isinstance(val, list):
+                                    merged["regions"][region]["variables"][var] = ex + val
+                            except Exception:
+                                pass
+
+                # region_histograms: add hist objects with +
+                for region, hists in chunk.get("region_histograms", {}).items():
+                    if region not in merged["region_histograms"]:
+                        merged["region_histograms"][region] = {}
+                    for hname, h in hists.items():
+                        if hname not in merged["region_histograms"][region]:
+                            merged["region_histograms"][region][hname] = h
+                        else:
+                            try:
+                                merged["region_histograms"][region][hname] = (
+                                    merged["region_histograms"][region][hname] + h
+                                )
+                            except Exception as e:
+                                logging.warning(f"Failed to merge histogram {hname}/{region}: {e}")
+
+                # region_cutflow: sum total_events and per-region n_events
+                cutflow = chunk.get("region_cutflow", {})
+                merged["region_cutflow"]["total_events"] += int(cutflow.get("total_events", 0))
+                for region, cf in cutflow.get("regions", {}).items():
+                    if region not in merged["region_cutflow"]["regions"]:
+                        merged["region_cutflow"]["regions"][region] = {"n_events": 0, "fraction": 0.0}
+                    merged["region_cutflow"]["regions"][region]["n_events"] += int(cf.get("n_events", 0))
+
+                # region_validation: sum n_events, collect warnings
+                validation = chunk.get("region_validation", {})
+                for region, vd in validation.get("regions", {}).items():
+                    if region not in merged["region_validation"]["regions"]:
+                        merged["region_validation"]["regions"][region] = {"n_events": 0, "fraction": 0.0}
+                    merged["region_validation"]["regions"][region]["n_events"] += int(vd.get("n_events", 0))
+                for okey, od in validation.get("overlaps", {}).items():
+                    if okey not in merged["region_validation"]["overlaps"]:
+                        merged["region_validation"]["overlaps"][okey] = dict(od)
+                    else:
+                        merged["region_validation"]["overlaps"][okey]["n_overlap"] = (
+                            int(merged["region_validation"]["overlaps"][okey].get("n_overlap", 0))
+                            + int(od.get("n_overlap", 0))
+                        )
+                merged["region_validation"]["warnings"].extend(validation.get("warnings", []))
+
+                # metadata: sum n_events_processed and processing_time
+                meta = chunk.get("metadata", {})
+                merged["metadata"]["n_events_processed"] += int(meta.get("n_events_processed", 0))
+                merged["metadata"]["processing_time"] += float(meta.get("processing_time", 0.0))
+                if "n_regions" in meta:
+                    merged["metadata"]["n_regions"] = meta["n_regions"]
+
+                # h_total_weight: sum across all chunks
+                merged["h_total_weight"] += float(chunk.get("h_total_weight", 0.0))
+
+            # Recompute fractions
+            total_cf = merged["region_cutflow"]["total_events"]
+            if total_cf > 0:
+                for region in merged["region_cutflow"]["regions"]:
+                    merged["region_cutflow"]["regions"][region]["fraction"] = (
+                        merged["region_cutflow"]["regions"][region]["n_events"] / total_cf
+                    )
+            total_ev = merged["metadata"]["n_events_processed"]
+            if total_ev > 0:
+                for region in merged["region_validation"]["regions"]:
+                    merged["region_validation"]["regions"][region]["fraction"] = (
+                        merged["region_validation"]["regions"][region]["n_events"] / total_ev
+                    )
+            return merged
+
         def postprocess(self, accumulator: Dict[str, Any]) -> Dict[str, Any]:
             """Post-process results."""
             import os
@@ -968,6 +1146,33 @@ if COFFEA_AVAILABLE:
                     chunk_files = []
 
             logging.info(f"postprocess called: event_selection_output={self.event_selection_output}, chunk_files={len(chunk_files)}")
+
+            # ── Merge region analysis results from per-chunk temp files ───────
+            if self._temp_dir and os.path.exists(self._temp_dir):
+                analysis_files = [
+                    os.path.join(self._temp_dir, f)
+                    for f in os.listdir(self._temp_dir)
+                    if f.startswith("analysis_chunk_") and f.endswith(".pkl")
+                ]
+                if analysis_files:
+                    merged_analysis = self._merge_analysis_chunks(analysis_files)
+                    accumulator["regions"] = merged_analysis["regions"]
+                    accumulator["region_histograms"] = merged_analysis["region_histograms"]
+                    accumulator["region_cutflow"] = merged_analysis["region_cutflow"]
+                    accumulator["region_validation"] = merged_analysis["region_validation"]
+                    accumulator["metadata"] = merged_analysis["metadata"]
+                    # Propagate summed h_total_weight back to the processor instance so
+                    # _save_event_selection (called below) receives the correct value.
+                    if merged_analysis.get("h_total_weight"):
+                        self.h_total_weight = merged_analysis["h_total_weight"]
+                    logging.info(f"Merged region analysis from {len(analysis_files)} chunks: "
+                                 f"{len(merged_analysis['regions'])} regions, "
+                                 f"{merged_analysis['metadata']['n_events_processed']} events processed")
+                    for af in analysis_files:
+                        try:
+                            os.remove(af)
+                        except Exception:
+                            pass
 
             # ── Merge event_weights from per-chunk temp files ─────────────────
             if self._temp_dir and os.path.exists(self._temp_dir):
