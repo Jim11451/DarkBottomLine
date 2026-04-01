@@ -167,6 +167,11 @@ class DarkBottomLineAnalyzer:
                 logging.error("Region manager not initialized and no event_selection_output provided. Cannot process events.")
                 raise ValueError("Region manager must be initialized or event_selection_output must be provided")
 
+        # Apply golden JSON lumi mask (data only; no-op for MC)
+        if self.base_processor.is_data:
+            events = self.base_processor.apply_lumi_mask(events)
+            logging.info(f"Events after golden JSON filter: {len(events)}")
+
         # Compute h_total_weight from raw events before any selection
         h_total_weight = self.base_processor.correction_manager.get_h_total_weight(events)
 

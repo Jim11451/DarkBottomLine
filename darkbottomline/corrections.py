@@ -902,9 +902,13 @@ class CorrectionManager:
     def get_h_total_weight(self, events: ak.Array) -> float:
         """
         Compute the normalization sum from all events before any selection.
-        Each event contributes +1 or -1 according to the sign of genWeight.
-        Call this immediately after the input file is read.
+        For MC: sum of sign(genWeight) over all events (+1 or -1 per event).
+        For data: always 1.0 (no generator weight normalization needed).
+        Call this immediately after the input file is read (and lumi mask applied for data).
         """
+        is_data = self.config.get("data", {}).get("is_data", False)
+        if is_data:
+            return 1.0
         try:
             _gw = np.asarray(ak.to_numpy(events.genWeight), dtype=float)
             return float(np.sum(np.sign(_gw)))

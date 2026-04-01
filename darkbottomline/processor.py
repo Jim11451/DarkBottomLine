@@ -11,9 +11,11 @@ import time
 try:
     from coffea import processor
     from coffea.nanoevents import NanoEventsFactory, NanoAODSchema
+    from coffea.lumi_tools import LumiMask
     COFFEA_AVAILABLE = True
 except ImportError:
     COFFEA_AVAILABLE = False
+    LumiMask = None
     logging.warning("Coffea not available. Using fallback implementation.")
 
 from .objects import build_objects
@@ -97,6 +99,26 @@ class DarkBottomLineProcessor:
         self.histogram_manager = HistogramManager()
         self.histograms = self.histogram_manager.define_histograms()
 
+        # Golden JSON lumi mask (data only)
+        data_cfg = config.get("data", {})
+        self.is_data = bool(data_cfg.get("is_data", False))
+        self._lumi_mask = None
+        if self.is_data and LumiMask is not None:
+            golden_json = data_cfg.get("golden_json")
+            if golden_json:
+                from pathlib import Path
+                gjp = Path(golden_json)
+                if not gjp.exists():
+                    # Try relative to project root
+                    gjp = Path(__file__).resolve().parent.parent / golden_json
+                if gjp.exists():
+                    self._lumi_mask = LumiMask(str(gjp))
+                    logging.info(f"Loaded golden JSON lumi mask from {gjp}")
+                else:
+                    logging.warning(f"Golden JSON not found: {golden_json}")
+        elif self.is_data and LumiMask is None:
+            logging.warning("is_data=True but coffea.lumi_tools not available; golden JSON filter will be skipped")
+
         # Initialize accumulators
         self.accumulator = {
             "histograms": self.histograms,
@@ -105,7 +127,21 @@ class DarkBottomLineProcessor:
             "event_weights": {},
         }
 
-        logging.info(f"Initialized DarkBottomLine processor for year {config.get('year', 'unknown')}")
+        logging.info(f"Initialized DarkBottomLine processor for year {config.get('year', 'unknown')} (is_data={self.is_data})")
+
+    def apply_lumi_mask(self, events: ak.Array) -> ak.Array:
+        """
+        Apply golden JSON lumi mask to data events.
+        No-op for MC (is_data=False) or when mask is not loaded.
+        Returns filtered events and the number removed.
+        """
+        if self._lumi_mask is None:
+            return events
+        good_lumi = self._lumi_mask(events.run, events.luminosityBlock)
+        n_before = len(events)
+        events = events[good_lumi]
+        logging.info(f"Golden JSON: {n_before} -> {len(events)} events ({n_before - len(events)} removed)")
+        return events
 
     def process(self, events: ak.Array, event_selection_output: Optional[str] = None) -> Dict[str, Any]:
         """
@@ -120,6 +156,11 @@ class DarkBottomLineProcessor:
         start_time = time.time()
         print(f"=== PROCESSING EVENTS ===")
         print(f"Total events loaded: {len(events)}")
+
+        # Apply golden JSON lumi mask (data only; no-op for MC)
+        if self.is_data:
+            events = self.apply_lumi_mask(events)
+            print(f"  Events after golden JSON filter: {len(events)}")
 
         # h_total_weight: sum of sign(genWeight) over ALL events before any selection
         h_total_weight = self.correction_manager.get_h_total_weight(events)
