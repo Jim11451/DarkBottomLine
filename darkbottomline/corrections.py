@@ -208,11 +208,12 @@ def _load_correction_file_with_edges_fix(file_path: str) -> Optional[CorrectionS
             return CorrectionSet.from_string(json_str)
         return CorrectionSet.from_string(json.dumps(data))
     except Exception as e:
+        err_str = str(e)
+        truncated = err_str[:200] + " [...]" if len(err_str) > 200 else err_str
         logging.warning(
-            "CorrectionSet.from_string failed after bin-edge fix for %s: %s",
+            "CorrectionSet.from_string failed after bin-edge fix for %s (will fall back to from_file): %s",
             file_path,
-            e,
-            exc_info=False,
+            truncated,
         )
         return None
 
