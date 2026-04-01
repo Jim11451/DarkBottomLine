@@ -334,6 +334,10 @@ class DarkBottomLineProcessor:
         import pickle
         import numpy as np
 
+        if events is None or len(events) == 0:
+            logging.debug("_save_event_selection: no events to save, skipping")
+            return
+
         # Ensure output directory exists
         outdir = os.path.dirname(output_file)
         if outdir:
@@ -462,6 +466,11 @@ class DarkBottomLineProcessor:
                 logging.warning(f"Failed to save raw awkward backup to {raw_backup}: {e}")
 
         # Save ROOT file if specified
+        if save_root:
+            if len(events) == 0:
+                logging.debug("Skipping ROOT write: no events in this chunk/selection")
+                save_root = False
+
         if save_root:
             try:
                 import uproot

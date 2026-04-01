@@ -832,8 +832,10 @@ if COFFEA_AVAILABLE:
             # Call analyzer.process() with appropriate parameters
             # In event_selection_only mode, analyzer will skip region analysis
             result = self.analyzer.process(
-                events_to_process, 
-                event_selection_output=self.event_selection_output if self.event_selection_only else None,
+                events_to_process,
+                # Never write the final output file per-chunk: the temp_dir mechanism
+                # collects chunks and postprocess() does the single final save.
+                event_selection_output=None,
                 event_selection_only=self.event_selection_only,
                 output_format=self.output_format,
                 n_events_total=self.n_events_total
