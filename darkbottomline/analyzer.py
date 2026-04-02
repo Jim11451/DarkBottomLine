@@ -225,24 +225,34 @@ class DarkBottomLineAnalyzer:
 
         # Step 2: Compute corrections and nominal total weight (for histograms + saving)
         # NOTE: This must happen BEFORE saving event_selection_output to ensure event weights are corrected
+        # For data, all weights are 1 — no MC corrections should be applied.
         logging.info("Computing corrections and event weights...")
         event_weights_nominal = None
         event_weights_save = {}
-        try:
-            weight_results = self.base_processor.correction_manager.compute_event_weights(
-                events, objects
-            )
-            event_weights_nominal = np.asarray(ak.to_numpy(weight_results["total_weight"]))
-            event_weights_save = _build_event_weights_for_save(weight_results)
-        except Exception as e:
-            logging.warning(f"Weight calculation failed, using unit weights: {e}", exc_info=True)
-            n_ev = len(events)
+        n_ev = len(events)
+        if self.base_processor.is_data:
+            logging.info("Data mode: skipping MC corrections, using unit weights.")
             event_weights_nominal = np.ones(n_ev, dtype=np.float64)
             event_weights_save = {
                 "generator": np.ones(n_ev, dtype=np.float64),
                 "pileup": np.ones(n_ev, dtype=np.float64),
                 "weight_total_nominal": np.ones(n_ev, dtype=np.float64),
             }
+        else:
+            try:
+                weight_results = self.base_processor.correction_manager.compute_event_weights(
+                    events, objects
+                )
+                event_weights_nominal = np.asarray(ak.to_numpy(weight_results["total_weight"]))
+                event_weights_save = _build_event_weights_for_save(weight_results)
+            except Exception as e:
+                logging.warning(f"Weight calculation failed, using unit weights: {e}", exc_info=True)
+                event_weights_nominal = np.ones(n_ev, dtype=np.float64)
+                event_weights_save = {
+                    "generator": np.ones(n_ev, dtype=np.float64),
+                    "pileup": np.ones(n_ev, dtype=np.float64),
+                    "weight_total_nominal": np.ones(n_ev, dtype=np.float64),
+                }
 
         # Step 2b: Optionally save preselected+weighted events to file AFTER weight corrections
         if event_selection_output:
