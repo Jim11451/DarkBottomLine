@@ -744,6 +744,9 @@ class DarkBottomLineAnalyzer:
         """Save results as ROOT file (histograms + per-event weight tree)."""
         try:
             import uproot
+            outdir = os.path.dirname(output_file)
+            if outdir:
+                os.makedirs(outdir, exist_ok=True)
             with uproot.recreate(output_file) as f:
                 # Save region histograms
                 for region_name, histograms in self.accumulator.get("region_histograms", {}).items():
@@ -769,6 +772,9 @@ class DarkBottomLineAnalyzer:
     def _save_pickle(self, output_file: str):
         """Save results as pickle file."""
         import pickle
+        outdir = os.path.dirname(output_file)
+        if outdir:
+            os.makedirs(outdir, exist_ok=True)
         with open(output_file, 'wb') as f:
             pickle.dump(self.accumulator, f)
         logging.info(f"Saved region results to {output_file}")
@@ -1251,11 +1257,9 @@ if COFFEA_AVAILABLE:
                         # Merge selected objects dictionaries
                         all_selected_objects = {}
                         if all_selected_objects_list:
-                            # Get all keys from all chunks
                             all_keys = set()
                             for obj_dict in all_selected_objects_list:
                                 all_keys.update(obj_dict.keys())
-                            # Concatenate arrays for each key
                             for key in all_keys:
                                 arrays_to_concat = []
                                 for obj_dict in all_selected_objects_list:
@@ -1263,24 +1267,32 @@ if COFFEA_AVAILABLE:
                                         arrays_to_concat.append(obj_dict[key])
                                 if arrays_to_concat:
                                     all_selected_objects[key] = ak.concatenate(arrays_to_concat)
-
-                        # Save using base processor helper
-                        logging.info(f"Saving accumulated event-level selection to {self.event_selection_output}")
-                        self.analyzer.base_processor._save_event_selection(
-                            self.event_selection_output, all_selected_events, all_selected_objects,
-                            max_events=self.config.get("max_events"),
-                            n_events_total=self.n_events_total,
-                            h_total_weight=self.h_total_weight,
-                            output_format=self.output_format
-                        )
-                        # Verify file was created
-                        if os.path.exists(self.event_selection_output):
-                            file_size = os.path.getsize(self.event_selection_output)
-                            logging.info(f"✓ Saved accumulated event-level selection from {len(all_selected_events_list)} chunks ({len(all_selected_events)} events) to {self.event_selection_output} ({file_size} bytes)")
-                        else:
-                            logging.error(f"✗ File {self.event_selection_output} was not created!")
                     else:
-                        logging.warning(f"No selected events found in {len(chunk_files)} chunk files, skipping event_selection_output save")
+                        # No events passed selection across all chunks — still write the output
+                        # file so Metadata (n_events, h_total_weight) is present for downstream tools.
+                        logging.warning(
+                            f"No selected events found in {len(chunk_files)} chunk files — "
+                            f"writing metadata-only output to {self.event_selection_output}"
+                        )
+                        all_selected_events = ak.Array([])
+                        all_selected_objects = {}
+
+                    # Save using base processor helper (handles empty events gracefully)
+                    logging.info(f"Saving accumulated event-level selection to {self.event_selection_output}")
+                    self.analyzer.base_processor._save_event_selection(
+                        self.event_selection_output, all_selected_events, all_selected_objects,
+                        max_events=self.config.get("max_events"),
+                        n_events_total=self.n_events_total,
+                        h_total_weight=self.h_total_weight,
+                        output_format=self.output_format
+                    )
+                    # Verify file was created
+                    if os.path.exists(self.event_selection_output):
+                        file_size = os.path.getsize(self.event_selection_output)
+                        n_saved = len(all_selected_events)
+                        logging.info(f"✓ Saved accumulated event-level selection from {len(chunk_files)} chunks ({n_saved} events) to {self.event_selection_output} ({file_size} bytes)")
+                    else:
+                        logging.error(f"✗ File {self.event_selection_output} was not created!")
 
                     # Clean up temporary files and directories
                     # Collect all unique temp directories from chunk file paths
