@@ -19,7 +19,7 @@ except ImportError:
     logging.warning("Coffea not available. Using fallback implementation.")
 
 from .objects import build_objects
-from .selections import apply_selection
+from .selections import apply_selection, calculate_recoil
 from .corrections import CorrectionManager
 from .histograms import HistogramManager
 
@@ -194,7 +194,8 @@ class DarkBottomLineProcessor:
                 self._save_event_selection(event_selection_output, selected_events, selected_objects,
                                            max_events=self.config.get("max_events"),
                                            n_events_total=len(events),
-                                           h_total_weight=h_total_weight)
+                                           h_total_weight=h_total_weight,
+                                           cutflow=cutflow)
                 # Verify file was created
                 import os
                 if os.path.exists(event_selection_output):
@@ -315,7 +316,9 @@ class DarkBottomLineProcessor:
     def _save_event_selection(self, output_file: str, events: ak.Array, objects: Dict[str, Any],
                               max_events: Optional[int] = None, n_events_total: Optional[int] = None,
                               h_total_weight: Optional[float] = None,
-                              event_weights: Optional[Dict[str, Any]] = None, output_format: str = "pkl"):
+                              event_weights: Optional[Dict[str, Any]] = None,
+                              cutflow: Optional[Dict[str, int]] = None,
+                              output_format: str = "pkl"):
         """
         Save selected events and corresponding objects to a file.
 
@@ -328,6 +331,7 @@ class DarkBottomLineProcessor:
             max_events: Maximum events parameter from config (optional)
             n_events_total: Total number of events BEFORE selection (optional)
             event_weights: Event weights dictionary (optional, includes all corrections)
+            cutflow: Event-selection cutflow dictionary (optional)
             output_format: Output format ("pkl", "root"). Default: "pkl" (saves both pkl and root)
         """
         import os
@@ -442,6 +446,9 @@ class DarkBottomLineProcessor:
                             serializable_weights[name] = val
                     serializable["event_weights"] = serializable_weights
 
+                if cutflow:
+                    serializable["cutflow"] = {str(k): int(v) for k, v in cutflow.items()}
+
                 # Ensure output directory exists
                 outdir = os.path.dirname(output_file_pkl)
                 if outdir:
@@ -507,31 +514,104 @@ class DarkBottomLineProcessor:
                 branches['PFMET_phi'] = _get_met_field_array('PFMET_phi', 'MET_phi')
                 branches['PFMET_significance'] = _get_met_field_array('PFMET_significance', 'MET_significance')
 
-                # Recoil (event-level scalar)
+                # Compatibility aliases requested by downstream feature consumers
+                branches['MET'] = branches['PFMET_pt']
+                branches['METPhi'] = branches['PFMET_phi']
+                branches['pfMetCorrSig'] = branches['PFMET_significance']
+
+                # Build Jet1/Jet2 (ordered by pt) and derived variables
+                def _delta_phi(phi_a, phi_b):
+                    dphi = phi_a - phi_b
+                    return np.arctan2(np.sin(dphi), np.cos(dphi))
+
                 try:
-                    met_pt = events['PFMET_pt'] if 'PFMET_pt' in events.fields else events['MET_pt']
-                    met_phi = events['PFMET_phi'] if 'PFMET_phi' in events.fields else events['MET_phi']
+                    jets_obj = objects.get('jets', ak.Array([[] for _ in range(len(events))]))
+                    if not hasattr(jets_obj, 'fields'):
+                        jets_obj = ak.Array([[] for _ in range(len(events))])
 
-                    # Use tight pt>30 leptons for CR-consistent recoil definition
-                    muons = objects.get('tight_muons_pt30', ak.Array([]))
-                    electrons = objects.get('tight_electrons_pt30', ak.Array([]))
+                    # Sort jets in each event by descending pt to define Jet1/Jet2
+                    jets_sorted = jets_obj
+                    if hasattr(jets_obj, 'fields') and 'pt' in jets_obj.fields:
+                        sort_idx = ak.argsort(jets_obj.pt, axis=1, ascending=False)
+                        jets_sorted = jets_obj[sort_idx]
 
-                    lep_px = ak.zeros_like(met_pt)
-                    lep_py = ak.zeros_like(met_pt)
-                    try:
-                        if len(ak.flatten(muons)) > 0:
-                            lep_px = lep_px + ak.sum(muons.pt * np.cos(muons.phi), axis=1)
-                            lep_py = lep_py + ak.sum(muons.pt * np.sin(muons.phi), axis=1)
-                        if len(ak.flatten(electrons)) > 0:
-                            lep_px = lep_px + ak.sum(electrons.pt * np.cos(electrons.phi), axis=1)
-                            lep_py = lep_py + ak.sum(electrons.pt * np.sin(electrons.phi), axis=1)
-                    except (Exception, BaseException):
-                        pass
+                    jets_padded = ak.pad_none(jets_sorted, 2, axis=1, clip=True)
+                    jet1 = jets_padded[:, 0]
+                    jet2 = jets_padded[:, 1]
 
-                    recoil_px = -(met_pt * np.cos(met_phi) + lep_px)
-                    recoil_py = -(met_pt * np.sin(met_phi) + lep_py)
-                    recoil = np.sqrt(recoil_px**2 + recoil_py**2)
-                    branches['recoil'] = ak.to_numpy(ak.fill_none(recoil, 0.0))
+                    n_jets_evt = ak.num(jets_sorted, axis=1)
+                    has_1 = n_jets_evt >= 1
+                    has_2 = n_jets_evt >= 2
+
+                    def _get_jet_field(jet_arr, field_name):
+                        try:
+                            if hasattr(jet_arr, 'fields') and field_name in jet_arr.fields:
+                                return ak.fill_none(jet_arr[field_name], 0.0, axis=0)
+                        except Exception:
+                            pass
+                        return ak.zeros_like(has_1, dtype=np.float64)
+
+                    met_pt_arr = events['PFMET_pt'] if 'PFMET_pt' in events.fields else events['MET_pt']
+                    met_phi_arr = events['PFMET_phi'] if 'PFMET_phi' in events.fields else events['MET_phi']
+
+                    j1_pt = ak.where(has_1, _get_jet_field(jet1, 'pt'), 0.0)
+                    j1_eta = ak.where(has_1, _get_jet_field(jet1, 'eta'), 0.0)
+                    j1_phi = ak.where(has_1, _get_jet_field(jet1, 'phi'), 0.0)
+                    j1_mass = ak.where(has_1, _get_jet_field(jet1, 'mass'), 0.0)
+                    j1_btag = ak.where(has_1, _get_jet_field(jet1, 'btagDeepFlavB'), 0.0)
+
+                    j2_pt = ak.where(has_2, _get_jet_field(jet2, 'pt'), 0.0)
+                    j2_eta = ak.where(has_2, _get_jet_field(jet2, 'eta'), 0.0)
+                    j2_phi = ak.where(has_2, _get_jet_field(jet2, 'phi'), 0.0)
+                    j2_mass = ak.where(has_2, _get_jet_field(jet2, 'mass'), 0.0)
+                    j2_btag = ak.where(has_2, _get_jet_field(jet2, 'btagDeepFlavB'), 0.0)
+
+                    dphi12 = _delta_phi(j1_phi, j2_phi)
+                    dphi12_abs = np.abs(dphi12)
+                    deta12_abs = np.abs(j1_eta - j2_eta)
+                    dr12 = np.sqrt(deta12_abs ** 2 + dphi12_abs ** 2)
+
+                    # Dijet four-vector from (pt, eta, phi, mass)
+                    px12 = j1_pt * np.cos(j1_phi) + j2_pt * np.cos(j2_phi)
+                    py12 = j1_pt * np.sin(j1_phi) + j2_pt * np.sin(j2_phi)
+                    pz12 = j1_pt * np.sinh(j1_eta) + j2_pt * np.sinh(j2_eta)
+                    e1 = np.sqrt((j1_pt * np.cosh(j1_eta)) ** 2 + j1_mass ** 2)
+                    e2 = np.sqrt((j2_pt * np.cosh(j2_eta)) ** 2 + j2_mass ** 2)
+                    e12 = e1 + e2
+                    pt12 = np.sqrt(px12 ** 2 + py12 ** 2)
+                    m12_sq = e12 ** 2 - px12 ** 2 - py12 ** 2 - pz12 ** 2
+                    m12 = np.sqrt(np.maximum(m12_sq, 0.0))
+
+                    dphi_jet_met = np.abs(_delta_phi(j1_phi, met_phi_arr))
+                    r_jet1_met = ak.where(met_pt_arr > 0.0, j1_pt / met_pt_arr, 0.0)
+
+                    # Variables requested in task image/definition
+                    branches['JetHT'] = ak.to_numpy(ak.sum(jets_sorted.pt, axis=1)) if hasattr(jets_sorted, 'fields') and 'pt' in jets_sorted.fields else np.zeros(len(events), dtype=float)
+                    branches['Jet1Pt'] = ak.to_numpy(j1_pt)
+                    branches['Jet2Pt'] = ak.to_numpy(j2_pt)
+                    branches['Jet1Eta'] = ak.to_numpy(j1_eta)
+                    branches['Jet2Eta'] = ak.to_numpy(j2_eta)
+                    branches['Jet1Phi'] = ak.to_numpy(j1_phi)
+                    branches['Jet2Phi'] = ak.to_numpy(j2_phi)
+                    branches['Jet1deepCSV'] = ak.to_numpy(j1_btag)
+                    branches['Jet2deepCSV'] = ak.to_numpy(j2_btag)
+                    branches['dPhiJet12'] = ak.to_numpy(ak.where(has_2, dphi12_abs, 0.0))
+                    branches['DetaJet12'] = ak.to_numpy(ak.where(has_2, deta12_abs, 0.0))
+                    branches['dRJet12'] = ak.to_numpy(ak.where(has_2, dr12, 0.0))
+                    branches['eta_Jet1Jet2'] = ak.to_numpy(ak.where(has_2, j1_eta + j2_eta, 0.0))
+                    branches['phi_Jet1Jet2'] = ak.to_numpy(ak.where(has_2, j1_phi + j2_phi, 0.0))
+                    branches['pT_Jet1Jet2'] = ak.to_numpy(ak.where(has_2, pt12, 0.0))
+                    branches['M_Jet1Jet2'] = ak.to_numpy(ak.where(has_2, m12, 0.0))
+                    branches['dPhi_jetMET'] = ak.to_numpy(ak.where(has_1, dphi_jet_met, 0.0))
+                    branches['rJet1PtMET'] = ak.to_numpy(ak.where(has_1, r_jet1_met, 0.0))
+                    branches['costheta_star'] = ak.to_numpy(ak.where(has_2, np.abs(np.tanh((j1_eta - j2_eta) / 2.0)), 0.0))
+                except Exception as e:
+                    logging.warning(f"Failed to build Jet1/Jet2 derived variables: {e}", exc_info=True)
+
+                # Recoil (event-level scalar), aligned with event selection definition
+                try:
+                    recoil = calculate_recoil(events, objects)
+                    branches['recoil'] = ak.to_numpy(recoil)
                 except Exception:
                     branches['recoil'] = np.zeros(len(events), dtype=float)
 
@@ -619,15 +699,46 @@ class DarkBottomLineProcessor:
                     f['Events'] = branches
 
                     # Add metadata tree with n_events (total events before selection)
-                    if n_events_total is not None:
+                    if n_events_total is not None or cutflow:
                         metadata_dict = {
-                            'n_events': np.array([n_events_total], dtype=np.int64),
                             'n_selected_events': np.array([len(events)], dtype=np.int64),
                         }
+                        if n_events_total is not None:
+                            metadata_dict['n_events'] = np.array([n_events_total], dtype=np.int64)
                         if h_total_weight is not None:
                             metadata_dict['h_total_weight'] = np.array([h_total_weight], dtype=np.float64)
+
+                        # Persist cutflow as scalar metadata branches (robust and easy to inspect).
+                        if cutflow:
+                            def _sanitize_cut_name(cut_name: str) -> str:
+                                safe = ''.join(ch if ch.isalnum() else '_' for ch in str(cut_name).lower())
+                                safe = safe.strip('_')
+                                return safe or 'unnamed_cut'
+
+                            total_for_fraction = None
+                            if 'Total events' in cutflow:
+                                total_for_fraction = float(cutflow['Total events'])
+                            elif len(cutflow) > 0:
+                                try:
+                                    total_for_fraction = float(max(cutflow.values()))
+                                except Exception:
+                                    total_for_fraction = None
+
+                            metadata_dict['cutflow_n_steps'] = np.array([len(cutflow)], dtype=np.int32)
+                            for idx, (cut_name, count) in enumerate(cutflow.items()):
+                                safe_name = _sanitize_cut_name(cut_name)
+                                value = int(count)
+                                metadata_dict[f'cf_{idx:02d}_{safe_name}'] = np.array([value], dtype=np.int64)
+                                frac = 0.0
+                                if total_for_fraction and total_for_fraction > 0.0:
+                                    frac = value / total_for_fraction
+                                metadata_dict[f'cf_{idx:02d}_{safe_name}_frac'] = np.array([frac], dtype=np.float64)
+
                         f['Metadata'] = metadata_dict
-                        logging.info(f"Added n_events={n_events_total} to ROOT file metadata")
+                        if n_events_total is not None:
+                            logging.info(f"Added n_events={n_events_total} to ROOT file metadata")
+                        if cutflow:
+                            logging.info(f"Added cutflow with {len(cutflow)} steps to ROOT file metadata")
 
                 # Verify file was created
                 if os.path.exists(output_file_root):
