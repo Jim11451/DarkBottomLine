@@ -19,7 +19,7 @@ except ImportError:
     logging.warning("Coffea not available. Using fallback implementation.")
 
 from .objects import build_objects
-from .selections import apply_selection
+from .selections import apply_selection, calculate_recoil
 from .corrections import CorrectionManager
 from .histograms import HistogramManager
 
@@ -194,7 +194,8 @@ class DarkBottomLineProcessor:
                 self._save_event_selection(event_selection_output, selected_events, selected_objects,
                                            max_events=self.config.get("max_events"),
                                            n_events_total=len(events),
-                                           h_total_weight=h_total_weight)
+                                           h_total_weight=h_total_weight,
+                                           cutflow=cutflow)
                 # Verify file was created
                 import os
                 if os.path.exists(event_selection_output):
@@ -315,7 +316,9 @@ class DarkBottomLineProcessor:
     def _save_event_selection(self, output_file: str, events: ak.Array, objects: Dict[str, Any],
                               max_events: Optional[int] = None, n_events_total: Optional[int] = None,
                               h_total_weight: Optional[float] = None,
-                              event_weights: Optional[Dict[str, Any]] = None, output_format: str = "pkl"):
+                              event_weights: Optional[Dict[str, Any]] = None,
+                              cutflow: Optional[Dict[str, int]] = None,
+                              output_format: str = "pkl"):
         """
         Save selected events and corresponding objects to a file.
 
@@ -328,6 +331,7 @@ class DarkBottomLineProcessor:
             max_events: Maximum events parameter from config (optional)
             n_events_total: Total number of events BEFORE selection (optional)
             event_weights: Event weights dictionary (optional, includes all corrections)
+            cutflow: Event-selection cutflow dictionary (optional)
             output_format: Output format ("pkl", "root"). Default: "pkl" (saves both pkl and root)
         """
         import os

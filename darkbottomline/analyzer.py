@@ -264,6 +264,7 @@ class DarkBottomLineAnalyzer:
                     n_events_total=n_events_total,
                     h_total_weight=h_total_weight,
                     event_weights=event_weights_save,
+                    cutflow=cutflow,
                     output_format=output_format
                 )
                 import os
@@ -899,7 +900,7 @@ if COFFEA_AVAILABLE:
                     from .objects import build_objects
                     # Apply event-level selection to get selected events
                     objects = build_objects(events_to_process, self.config)
-                    selected_events, selected_objects, _ = apply_selection(
+                    selected_events, selected_objects, chunk_cutflow = apply_selection(
                         events_to_process, objects, self.config
                     )
                     logging.info(f"Chunk: {len(selected_events)}/{len(events_to_process)} events passed selection")
@@ -911,7 +912,15 @@ if COFFEA_AVAILABLE:
                     chunk_id = f"{int(time.time() * 1000000)}_{uuid.uuid4().hex[:8]}"
                     chunk_file = os.path.join(self._temp_dir, f"chunk_{chunk_id}.pkl")
                     with open(chunk_file, 'wb') as f:
-                        pickle.dump({"events": selected_events, "objects": selected_objects}, f, protocol=pickle.HIGHEST_PROTOCOL)
+                        pickle.dump(
+                            {
+                                "events": selected_events,
+                                "objects": selected_objects,
+                                "cutflow": chunk_cutflow,
+                            },
+                            f,
+                            protocol=pickle.HIGHEST_PROTOCOL,
+                        )
 
                     # Add to accumulator dict (this will be merged across workers)
                     # Note: Don't store in accumulator because Coffea can't properly merge True values
@@ -1236,6 +1245,7 @@ if COFFEA_AVAILABLE:
                     # Load all chunks from files
                     all_selected_events_list = []
                     all_selected_objects_list = []
+                    merged_cutflow: Dict[str, int] = {}
 
                     for chunk_file in chunk_files:
                         if os.path.exists(chunk_file):
@@ -1244,9 +1254,16 @@ if COFFEA_AVAILABLE:
                                     chunk_data = pickle.load(f)
                                     events = chunk_data.get("events")
                                     objects = chunk_data.get("objects")
+                                    cutflow = chunk_data.get("cutflow")
                                     if events is not None and len(events) > 0:
                                         all_selected_events_list.append(events)
                                         all_selected_objects_list.append(objects)
+                                    if isinstance(cutflow, dict):
+                                        for key, value in cutflow.items():
+                                            try:
+                                                merged_cutflow[key] = int(merged_cutflow.get(key, 0)) + int(value)
+                                            except Exception:
+                                                pass
                             except Exception as e:
                                 logging.warning(f"Failed to load chunk file {chunk_file}: {e}")
 
