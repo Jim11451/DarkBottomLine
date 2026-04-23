@@ -1,0 +1,71 @@
+RUN3/RUN2 XSECTION RATIO PER EVENT (Run3 year=2022)
+ratio = run3_xsection_pb / run2_xsection_pb
+Run3 bins were mapped to nearest Run2 bins where exact bins do not exist.
+
+category | run3_dataset | mapped_run2_token | run3_pb | run2_pb | ratio
+DIBOSON | WW_TuneCP5_13p6TeV_pythia8 | WW | 80.23 | 77.9187 | 1.029663
+DIBOSON | WZ_TuneCP5_13p6TeV_pythia8 | WZ | 29.1 | 46.781 | 0.622047
+DIBOSON | ZZ_TuneCP5_13p6TeV_pythia8 | ZZ | 12.75 | 23.1168 | 0.551547
+DYto2L-2Jets | DYto2L-2Jets_MLL-50_PTLL-100to200_2J_TuneCP5_13p6TeV_amcatnloFXFX-pythia8 | DYJetsToLL_Pt-100To250 | 51.68 | 83.12 | 0.621752
+DYto2L-2Jets | DYto2L-2Jets_MLL-50_PTLL-200to400_2J_TuneCP5_13p6TeV_amcatnloFXFX-pythia8 | DYJetsToLL_Pt-250To400 | 7.159 | 3.047 | 2.349524
+DYto2L-2Jets | DYto2L-2Jets_MLL-50_PTLL-40to100_2J_TuneCP5_13p6TeV_amcatnloFXFX-pythia8 | DYJetsToLL_Pt-50To100 | 179.3 | 354.3 | 0.506068
+DYto2L-2Jets | DYto2L-2Jets_MLL-50_PTLL-600_2J_TuneCP5_13p6TeV_amcatnloFXFX-pythia8 | DYJetsToLL_Pt-650ToInf | 0.07019 | 0.03636 | 1.930418
+DYto2L-2Jets | DYto2L-2Jets_MLL-50_PTLL-600_2J_TuneCP5_13p6TeV_amcatnloFXFX-pythia8 | DYJetsToLL_Pt-650ToInf | 0.07019 | 0.03636 | 1.930418
+SMHiggs_WminusH_Hto2B_WtoLNu | WminusH_Hto2B_WtoLNu_M-125_TuneCP5_13p6TeV_powheg-pythia8 | WminusH_HToBB | 0.1887 | 0.3654 | 0.516420
+SMHiggs_WminusH_Hto2B_WtoLNu | WminusH_Hto2B_WtoLNu_M-125_TuneCP5_13p6TeV_powheg-pythia8 | WminusH_HToBB | 0.1887 | 0.3654 | 0.516420
+SMHiggs_WplusH_Hto2B_WtoLNu | WplusH_Hto2B_WtoLNu_M-125_TuneCP5_13p6TeV_powheg-pythia8 | WplusH_HToBB_WToLNu_M125 | 0.3001 | 0.2819 | 1.064562
+SMHiggs_WplusH_Hto2B_WtoLNu | WplusH_Hto2B_WtoLNu_M-125_TuneCP5_13p6TeV_powheg-pythia8 | WplusH_HToBB_WToLNu_M125 | 0.3001 | 0.2819 | 1.064562
+SMHiggs_ZH_Hto2B_Zto2L | ZH_Hto2B_Zto2L_M-125_TuneCP5_13p6TeV_powheg-pythia8 | ZH_HToBB_ZToLL_M125 | 0.08545 | 0.07924 | 1.078370
+SMHiggs_ZH_Hto2B_Zto2L | ZH_Hto2B_Zto2L_M-125_TuneCP5_13p6TeV_powheg-pythia8 | ZH_HToBB_ZToLL_M125 | 0.08545 | 0.07924 | 1.078370
+SMHiggs_ZH_Hto2B_Zto2L | ggZH_Hto2B_Zto2L_M-125_TuneCP5_13p6TeV_powheg-pythia8 | ZH_HToBB_ZToLL_M125 | 0.08545 | 0.07924 | 1.078370
+SMHiggs_ZH_Hto2B_Zto2L | ggZH_Hto2B_Zto2L_M-125_TuneCP5_13p6TeV_powheg-pythia8 | ZH_HToBB_ZToLL_M125 | 0.08545 | 0.07924 | 1.078370
+SMHiggs_ZH_Hto2B_Zto2Nu | ZH_Hto2B_Zto2Nu_M-125_TuneCP5_13p6TeV_powheg-minlo-pythia8 | ZH_HToBB_ZToNuNu_M125 | 0.168 | 0.1565 | 1.073482
+SMHiggs_ZH_Hto2B_Zto2Nu | ggZH_Hto2B_Zto2Nu_M-125_TuneCP5_13p6TeV_powheg-pythia8 | ZH_HToBB_ZToNuNu_M125 | 0.168 | 0.1565 | 1.073482
+SMHiggs_ZH_Hto2B_Zto2Nu | ggZH_Hto2B_Zto2Nu_M-125_TuneCP5_13p6TeV_powheg-pythia8 | ZH_HToBB_ZToNuNu_M125 | 0.168 | 0.1565 | 1.073482
+SingleTop_TBbarQ_t-channel | TBbarQ_t-channel_4FS_TuneCP5_13p6TeV_powheg-madspin-pythia8 | ST_t-channel_top_4f | 123.8 | 136.02 | 0.910160
+SingleTop_TBbartoLplusNuBbar-s-channel | TBbartoLplusNuBbar-s-channel-4FS_TuneCP5_13p6TeV_amcatnlo-pythia8 | ST_s-channel_4f_leptonDecays | 2.278 | 10.32 | 0.220736
+SingleTop_TWminus | TWminustoLNu2Q_TuneCP5_13p6TeV_powheg-pythia8 | ST_tW_top_5f | 35.99 | 38.09 | 0.944867
+SingleTop_TbarBQ_t-channel | TbarBQ_t-channel_4FS_TuneCP5_13p6TeV_powheg-madspin-pythia8 | ST_t-channel_antitop_4f | 75.47 | 80.95 | 0.932304
+SingleTop_TbarBtoLminusNuB-s-channel | TbarBtoLminusNuB-s-channel-4FS_TuneCP5_13p6TeV_amcatnlo-pythia8 | ST_s-channel_4f_leptonDecays | 1.43 | 10.32 | 0.138566
+SingleTop_TbarWplus | TbarWplustoLNu2Q_TuneCP5_13p6TeV_powheg-pythia8 | ST_tW_antitop_5f | 36.05 | 38.06 | 0.947189
+Top | TTto2L2Nu_TuneCP5_13p6TeV_powheg-pythia8 | TTTo2L2Nu | 80.02 | 87.5595 | 0.913893
+Top | TTto4Q_TuneCP5_13p6TeV_powheg-pythia8 | TTToHadronic | 333.8 | 381.092 | 0.875903
+Top | TTtoLNu2Q_TuneCP5_13p6TeV_powheg-pythia8 | TTToSemiLeptonic | 348.3 | 365.248 | 0.953598
+WtoLNu-2Jets | WtoLNu-2Jets_PTLNu-100to200_2J_TuneCP5_13p6TeV_amcatnloFXFX-pythia8 | WJetsToLNu_Pt-100To250 | 421.9 | 769.8 | 0.548064
+WtoLNu-2Jets | WtoLNu-2Jets_PTLNu-200to400_2J_TuneCP5_13p6TeV_amcatnloFXFX-pythia8 | WJetsToLNu_Pt-250To400 | 54.77 | 27.62 | 1.982983
+WtoLNu-2Jets | WtoLNu-2Jets_PTLNu-200to400_2J_TuneCP5_13p6TeV_amcatnloFXFX-pythia8 | WJetsToLNu_Pt-250To400 | 54.77 | 27.62 | 1.982983
+WtoLNu-2Jets | WtoLNu-2Jets_PTLNu-400to600_2J_TuneCP5_13p6TeV_amcatnloFXFX-pythia8 | WJetsToLNu_Pt-400To600 | 3.119 | 3.591 | 0.868560
+WtoLNu-2Jets | WtoLNu-2Jets_PTLNu-400to600_2J_TuneCP5_13p6TeV_amcatnloFXFX-pythia8 | WJetsToLNu_Pt-400To600 | 3.119 | 3.591 | 0.868560
+WtoLNu-2Jets | WtoLNu-2Jets_PTLNu-40to100_2J_TuneCP5_13p6TeV_amcatnloFXFX-pythia8 | WJetsToLNu_Pt-50To100 | 1598 | 3569 | 0.447744
+WtoLNu-2Jets | WtoLNu-2Jets_PTLNu-600_2J_TuneCP5_13p6TeV_amcatnloFXFX-pythia8 | WJetsToLNu_Pt-600ToInf | 0.5261 | 0.549 | 0.958288
+WtoLNu-2Jets | WtoLNu-2Jets_PTLNu-600_2J_TuneCP5_13p6TeV_amcatnloFXFX-pythia8 | WJetsToLNu_Pt-600ToInf | 0.5261 | 0.549 | 0.958288
+Zto2Nu-2Jets | Zto2Nu-2Jets_PTNuNu-100to200_2J_TuneCP5_13p6TeV_amcatnloFXFX-pythia8 | DYJetsToNuNu_PtZ-100To250 | 100.4 | 164.73 | 0.609482
+Zto2Nu-2Jets | Zto2Nu-2Jets_PTNuNu-200to400_2J_TuneCP5_13p6TeV_amcatnloFXFX-pythia8 | DYJetsToNuNu_PtZ-250To400 | 13.86 | 6.219 | 2.228654
+Zto2Nu-2Jets | Zto2Nu-2Jets_PTNuNu-400to600_2J_TuneCP5_13p6TeV_amcatnloFXFX-pythia8 | DYJetsToNuNu_PtZ-400To650 | 0.7816 | 0.8355 | 0.935488
+Zto2Nu-2Jets | Zto2Nu-2Jets_PTNuNu-40to100_2J_TuneCP5_13p6TeV_amcatnloFXFX-pythia8 | DYJetsToNuNu_PtZ-50To100 | 335.5 | 709.5 | 0.472868
+Zto2Nu-2Jets | Zto2Nu-2Jets_PTNuNu-600_2J_TuneCP5_13p6TeV_amcatnloFXFX-pythia8 | DYJetsToNuNu_PtZ-650ToInf | 0.1311 | 0.07812 | 1.678187
+Zto2Nu-2Jets | Zto2Nu-2Jets_PTNuNu-600_2J_TuneCP5_13p6TeV_amcatnloFXFX-pythia8 | DYJetsToNuNu_PtZ-650ToInf | 0.1311 | 0.07812 | 1.678187
+
+Matched entries: 42
+Unmatched entries: 6
+Unique repeated run3 datasets in 2022 list: 11
+Repeated run3 datasets (dataset: count):
+  DYto2L-2Jets_MLL-50_PTLL-400to600_2J_TuneCP5_13p6TeV_amcatnloFXFX-pythia8: 2
+  DYto2L-2Jets_MLL-50_PTLL-600_2J_TuneCP5_13p6TeV_amcatnloFXFX-pythia8: 2
+  WminusH_Hto2B_WtoLNu_M-125_TuneCP5_13p6TeV_powheg-pythia8: 2
+  WplusH_Hto2B_WtoLNu_M-125_TuneCP5_13p6TeV_powheg-pythia8: 2
+  WtoLNu-2Jets_PTLNu-200to400_2J_TuneCP5_13p6TeV_amcatnloFXFX-pythia8: 2
+  WtoLNu-2Jets_PTLNu-400to600_2J_TuneCP5_13p6TeV_amcatnloFXFX-pythia8: 2
+  WtoLNu-2Jets_PTLNu-600_2J_TuneCP5_13p6TeV_amcatnloFXFX-pythia8: 2
+  ZH_Hto2B_Zto2L_M-125_TuneCP5_13p6TeV_powheg-pythia8: 2
+  Zto2Nu-2Jets_PTNuNu-600_2J_TuneCP5_13p6TeV_amcatnloFXFX-pythia8: 2
+  ggZH_Hto2B_Zto2L_M-125_TuneCP5_13p6TeV_powheg-pythia8: 2
+  ggZH_Hto2B_Zto2Nu_M-125_TuneCP5_13p6TeV_powheg-pythia8: 2
+
+UNMATCHED:
+DYto2L-2Jets | DYto2L-2Jets_MLL-50_PTLL-400to600_2J_TuneCP5_13p6TeV_amcatnloFXFX-pythia8 | 0.4157 | run2 lookup failed: local variable 'Xsec' referenced before assignment
+DYto2L-2Jets | DYto2L-2Jets_MLL-50_PTLL-400to600_2J_TuneCP5_13p6TeV_amcatnloFXFX-pythia8 | 0.4157 | run2 lookup failed: local variable 'Xsec' referenced before assignment
+SMHiggs_GluGluHto2B | GluGluHto2B_M-125_TuneCP5_13p6TeV_powheg-minlo-pythia8 | 30.2 | no mapping token
+SMHiggs_VBFHto2B | VBFHto2B_M-125_TuneCP5_13p6TeV_powheg-pythia8 | 4.18 | no mapping token
+SMHiggs_VBFHto2B | VBFHto2B_M-125_dipoleRecoilOn_TuneCP5_13p6TeV_powheg-pythia8 | 4.18 | no mapping token
+SMHiggs_ttHto2B | ttHto2B_M-125_TuneCP5_13p6TeV_powheg-pythia8 | 0.5742 | no mapping token

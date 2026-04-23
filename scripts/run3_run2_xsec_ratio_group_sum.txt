@@ -1,0 +1,29 @@
+RUN3/RUN2 XSECTION COMPARISON (GROUP SUMS ONLY)
+Year: Run3=2022; Run2 from scripts/run2_xsection.py
+
+A) Deduplicated by Run3 full_dataset (recommended)
+group | sum_run3_pb | sum_run2_pb | ratio(run3/run2)
+WJets | 2078.32 | 4370.56 | 0.475526
+DYJets | 238.209 | 440.503 | 0.540766
+ZJets | 450.673 | 881.363 | 0.511336
+DIBOSON | 122.08 | 147.817 | 0.825889
+SingleTop | 275.018 | 313.76 | 0.876523
+Top | 762.12 | 833.9 | 0.913923
+SMH | 0.9957 | 1.11878 | 0.889987
+OVERALL | 3927.41 | 6989.02 | 0.561940
+
+B) Raw (includes duplicated Run3 datasets)
+group | sum_run3_pb | sum_run2_pb | ratio(run3/run2)
+WJets | 2136.73 | 4402.32 | 0.485365
+DYJets | 238.279 | 440.54 | 0.540881
+ZJets | 450.804 | 881.441 | 0.511440
+DIBOSON | 122.08 | 147.817 | 0.825889
+SingleTop | 275.018 | 313.76 | 0.876523
+Top | 762.12 | 833.9 | 0.913923
+SMH | 1.8234 | 2.08106 | 0.876188
+OVERALL_RAW | 3986.85 | 7021.86 | 0.567778
+
+Matched mapped datasets: 42
+Unique matched datasets (dedup basis): 32
+Unmatched datasets: 6
+Unmatched are mainly SMH channels not present in run2_xsection.py and one DY bin not defined there.

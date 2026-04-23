@@ -1,0 +1,43 @@
+RUN3/RUN2 WHOLE-XSECTION RATIO BY CATEGORY
+A) Raw (includes repeated datasets in xsection_results.json)
+category | sum_run3_pb | sum_run2_pb | ratio
+DIBOSON | 122.08 | 147.817 | 0.825889
+DYto2L-2Jets | 238.279 | 440.54 | 0.540881
+SMHiggs_WminusH_Hto2B_WtoLNu | 0.3774 | 0.7308 | 0.516420
+SMHiggs_WplusH_Hto2B_WtoLNu | 0.6002 | 0.5638 | 1.064562
+SMHiggs_ZH_Hto2B_Zto2L | 0.3418 | 0.31696 | 1.078370
+SMHiggs_ZH_Hto2B_Zto2Nu | 0.504 | 0.4695 | 1.073482
+SingleTop_TBbarQ_t-channel | 123.8 | 136.02 | 0.910160
+SingleTop_TBbartoLplusNuBbar-s-channel | 2.278 | 10.32 | 0.220736
+SingleTop_TWminus | 35.99 | 38.09 | 0.944867
+SingleTop_TbarBQ_t-channel | 75.47 | 80.95 | 0.932304
+SingleTop_TbarBtoLminusNuB-s-channel | 1.43 | 10.32 | 0.138566
+SingleTop_TbarWplus | 36.05 | 38.06 | 0.947189
+Top | 762.12 | 833.9 | 0.913923
+WtoLNu-2Jets | 2136.73 | 4402.32 | 0.485365
+Zto2Nu-2Jets | 450.804 | 881.441 | 0.511440
+OVERALL_RAW | 3986.85 | 7021.86 | 0.567778
+
+B) Deduplicated by run3 full_dataset (count each dataset once)
+category | sum_run3_pb | sum_run2_pb | ratio
+DIBOSON | 122.08 | 147.817 | 0.825889
+DYto2L-2Jets | 238.209 | 440.503 | 0.540766
+SMHiggs_WminusH_Hto2B_WtoLNu | 0.1887 | 0.3654 | 0.516420
+SMHiggs_WplusH_Hto2B_WtoLNu | 0.3001 | 0.2819 | 1.064562
+SMHiggs_ZH_Hto2B_Zto2L | 0.1709 | 0.15848 | 1.078370
+SMHiggs_ZH_Hto2B_Zto2Nu | 0.336 | 0.313 | 1.073482
+SingleTop_TBbarQ_t-channel | 123.8 | 136.02 | 0.910160
+SingleTop_TBbartoLplusNuBbar-s-channel | 2.278 | 10.32 | 0.220736
+SingleTop_TWminus | 35.99 | 38.09 | 0.944867
+SingleTop_TbarBQ_t-channel | 75.47 | 80.95 | 0.932304
+SingleTop_TbarBtoLminusNuB-s-channel | 1.43 | 10.32 | 0.138566
+SingleTop_TbarWplus | 36.05 | 38.06 | 0.947189
+Top | 762.12 | 833.9 | 0.913923
+WtoLNu-2Jets | 2078.32 | 4370.56 | 0.475526
+Zto2Nu-2Jets | 450.673 | 881.363 | 0.511336
+OVERALL_DEDUP | 3927.41 | 6989.02 | 0.561940
+
+STRANGE/IMPORTANT NOTES
+- Some Run3 datasets are duplicated in xsection_results.json for 2022 (raw sums are inflated by duplicates).
+- run2_xsection.py has no GluGluHto2B, VBFHto2B, ttHto2B entries -> these Run3 SMH datasets are unmatched.
+- Bin edges differ between Run3 and Run2 for PT slices; nearest-bin mapping was used for comparison.

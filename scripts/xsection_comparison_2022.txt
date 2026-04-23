@@ -1,0 +1,67 @@
+XSECTION COMPARISON REPORT (year=2022)
+Source A: scripts/StackPlotter_addMeanWeight.py (classification + external sampleXsecFiles.getXsec)
+Source B: scripts/xsection_results.json (numeric xsections)
+
+Important context: StackPlotter_addMeanWeight.py currently supports years 2016/2017/2018 only; 2022 is not implemented in that script.
+
+A) addMeanWeight categories (from script logic)
+   WJets, DYJets, ZJets, GJets, DIBOSON, STop, Top, QCD, SMH
+
+B) xsection_results.json aggregates by JSON top-level category (2022)
+   DIBOSON                             entries= 3 sum_xsec_pb=  122.080000
+   DYto2L-2Jets                        entries= 7 sum_xsec_pb=  239.110780
+   SMHiggs_GluGluHto2B                 entries= 1 sum_xsec_pb=   30.200000
+   SMHiggs_VBFHto2B                    entries= 2 sum_xsec_pb=    8.360000
+   SMHiggs_WminusH_Hto2B_WtoLNu        entries= 2 sum_xsec_pb=    0.377400
+   SMHiggs_WplusH_Hto2B_WtoLNu         entries= 2 sum_xsec_pb=    0.600200
+   SMHiggs_ZH_Hto2B_Zto2L              entries= 4 sum_xsec_pb=    0.341800
+   SMHiggs_ZH_Hto2B_Zto2Nu             entries= 3 sum_xsec_pb=    0.504000
+   SMHiggs_ttHto2B                     entries= 1 sum_xsec_pb=    0.574200
+   SingleTop_TBbarQ_t-channel          entries= 1 sum_xsec_pb=  123.800000
+   SingleTop_TBbartoLplusNuBbar-s-channel entries= 1 sum_xsec_pb=    2.278000
+   SingleTop_TWminus                   entries= 1 sum_xsec_pb=   35.990000
+   SingleTop_TbarBQ_t-channel          entries= 1 sum_xsec_pb=   75.470000
+   SingleTop_TbarBtoLminusNuB-s-channel entries= 1 sum_xsec_pb=    1.430000
+   SingleTop_TbarWplus                 entries= 1 sum_xsec_pb=   36.050000
+   Top                                 entries= 3 sum_xsec_pb=  762.120000
+   WtoLNu-2Jets                        entries= 8 sum_xsec_pb= 2136.730200
+   Zto2Nu-2Jets                        entries= 6 sum_xsec_pb=  450.803800
+
+C) Strict matching check using addMeanWeight filename patterns on JSON full_dataset names
+   addMeanWeight_cat   entries   sum_xsec_pb
+   WJets                  0     0.000000
+   DYJets                 0     0.000000
+   ZJets                  0     0.000000
+   GJets                  0     0.000000
+   DIBOSON                3   122.080000
+   STop                   0     0.000000
+   Top                    0     0.000000
+   QCD                    0     0.000000
+   SMH                    0     0.000000
+   coverage_strict = 3.03% of total JSON 2022 xsection
+   unmatched_entries_strict = 45 / 48
+
+D) Alias/category remapping (Run2 labels -> Run3 JSON categories)
+   addMeanWeight_cat   mapped_entries   mapped_sum_xsec_pb
+   WJets                        8        2136.730200
+   DYJets                       7         239.110780
+   ZJets                        6         450.803800
+   GJets                        0           0.000000
+   DIBOSON                      3         122.080000
+   STop                         6         275.018000
+   Top                          3         762.120000
+   QCD                          0           0.000000
+   SMH                         15          40.957600
+   coverage_alias = 100.00% of total JSON 2022 xsection
+
+E) Basic analysis
+   - Strict pattern matching is very low-coverage because addMeanWeight uses Run2-style dataset tokens while JSON(2022) uses Run3 naming.
+   - With category-level remapping, most physics groups align: WJets/DYJets/ZJets/DIBOSON/STop/Top/SMH are all representable.
+   - Categories with no 2022 representation in JSON under current mapping: QCD, GJets.
+   - Top-1 contribution: WJets = 2136.730200 pb (53.06% of remapped sum).
+   - Top-2 contribution: Top = 762.120000 pb (18.93% of remapped sum).
+   - Top-3 contribution: ZJets = 450.803800 pb (11.20% of remapped sum).
+
+F) Note on numeric extraction from addMeanWeight directly
+   - Direct numeric dump from StackPlotter_addMeanWeight is blocked in this checkout because sampleXsecFiles.sample_xsec_run2_harmony is missing.
+   - This report therefore compares addMeanWeight category logic to 2022 JSON values, plus a strict-name and alias-remap consistency view.
