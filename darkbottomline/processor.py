@@ -338,14 +338,14 @@ class DarkBottomLineProcessor:
         import pickle
         import numpy as np
 
-        if events is None or len(events) == 0:
-            logging.debug("_save_event_selection: no events to save, skipping")
-            return
-
-        # Ensure output directory exists
+        # Ensure output directory exists before any early return so that
+        # downstream processes can rely on the directory being present even
+        # when no events pass the selection (e.g. data after golden JSON filter).
         outdir = os.path.dirname(output_file)
         if outdir:
             os.makedirs(outdir, exist_ok=True)
+
+        no_events = events is None or len(events) == 0
 
         # Auto-detect strict output intent from file extension.
         # If user explicitly provides a .root target, enforce root-only output.
@@ -382,101 +382,77 @@ class DarkBottomLineProcessor:
 
         # Save pickle file if specified
         if save_pkl:
-            # 1) Save a human/inspection-friendly representation where all
-            #    Awkward arrays are converted to plain Python lists (via
-            #    ak.to_list). This is what we write to `output_file`.
-            # 2) Also attempt to save the raw awkward data as a backup next to
-            #    the main file with suffix `.awk_raw.pkl` (best-effort).
-
-            # Build serializable dict
+            # Build serializable dict — always include metadata even when no events passed selection.
             serializable = {}
-            
-            # Add n_events: total events before selection
             if n_events_total is not None:
                 serializable["n_events"] = n_events_total
-            
-            # Keep max_events for backward compatibility
             if max_events is not None:
                 serializable["total_event"] = max_events
-                
-            try:
-                # Convert events (awkward array) to list-of-records where possible
+            serializable["n_selected_events"] = 0 if no_events else len(events)
+            if h_total_weight is not None:
+                serializable["h_total_weight"] = h_total_weight
+
+            if not no_events:
                 try:
-                    serializable["events"] = ak.to_list(events)
-                except Exception:
-                    # Fallback: try to coerce to Python list directly
                     try:
-                        serializable["events"] = list(events)
+                        serializable["events"] = ak.to_list(events)
                     except Exception:
-                        serializable["events"] = None
-
-                # Convert objects: for each awkward array, convert to list
-                serializable_objects = {}
-                for k, v in objects.items():
-                    if isinstance(v, ak.Array):
                         try:
-                            serializable_objects[k] = ak.to_list(v)
+                            serializable["events"] = list(events)
                         except Exception:
+                            serializable["events"] = []
+
+                    serializable_objects = {}
+                    for k, v in objects.items():
+                        if isinstance(v, ak.Array):
                             try:
-                                serializable_objects[k] = list(v)
+                                serializable_objects[k] = ak.to_list(v)
                             except Exception:
-                                serializable_objects[k] = None
-                    else:
-                        # Keep non-Awkward values as-is (likely small metadata)
-                        serializable_objects[k] = v
-
-                serializable["objects"] = serializable_objects
-
-                # Add event weights if provided (now with corrections)
-                if event_weights:
-                    serializable_weights = {}
-                    for name, val in event_weights.items():
-                        if isinstance(val, dict):
-                            # Dictionary of different variations (e.g., central/up/down)
-                            serializable_weights[name] = {}
-                            for k, v in val.items():
-                                if isinstance(v, np.ndarray):
-                                    serializable_weights[name][k] = v.tolist()
-                                else:
-                                    serializable_weights[name][k] = v
-                        elif isinstance(val, np.ndarray):
-                            # Single numpy array
-                            serializable_weights[name] = val.tolist()
+                                try:
+                                    serializable_objects[k] = list(v)
+                                except Exception:
+                                    serializable_objects[k] = []
                         else:
-                            serializable_weights[name] = val
-                    serializable["event_weights"] = serializable_weights
+                            serializable_objects[k] = v
+                    serializable["objects"] = serializable_objects
 
-                if cutflow:
-                    serializable["cutflow"] = {str(k): int(v) for k, v in cutflow.items()}
+                    if event_weights:
+                        serializable_weights = {}
+                        for name, val in event_weights.items():
+                            if isinstance(val, dict):
+                                serializable_weights[name] = {}
+                                for k, v in val.items():
+                                    serializable_weights[name][k] = v.tolist() if isinstance(v, np.ndarray) else v
+                            elif isinstance(val, np.ndarray):
+                                serializable_weights[name] = val.tolist()
+                            else:
+                                serializable_weights[name] = val
+                        serializable["event_weights"] = serializable_weights
+                except Exception as e:
+                    logging.warning(f"Failed to serialise events/objects for pkl: {e}")
+            else:
+                serializable["events"] = []
+                serializable["objects"] = {}
+                logging.info("No selected events — writing metadata-only pickle")
 
-                # Ensure output directory exists
-                outdir = os.path.dirname(output_file_pkl)
-                if outdir:
-                    os.makedirs(outdir, exist_ok=True)
-
-                # Write the safe version
+            try:
                 with open(output_file_pkl, "wb") as f:
                     pickle.dump(serializable, f, protocol=pickle.HIGHEST_PROTOCOL)
-
                 logging.info(f"Event selection (serializable) saved to {output_file_pkl}")
-
             except Exception as e:
                 logging.warning(f"Failed to save serializable event selection to {output_file_pkl}: {e}")
 
-            # Try to save raw awkward structures as a backup for advanced users
-            try:
-                raw_backup = output_file_pkl + ".awk_raw.pkl"
-                with open(raw_backup, "wb") as f:
-                    pickle.dump({"events": events, "objects": objects, "event_weights": event_weights}, f, protocol=pickle.HIGHEST_PROTOCOL)
-                logging.info(f"Raw awkward backup saved to {raw_backup}")
-            except Exception as e:
-                logging.warning(f"Failed to save raw awkward backup to {raw_backup}: {e}")
+            # Best-effort raw awkward backup (only meaningful when events exist)
+            if not no_events:
+                try:
+                    raw_backup = output_file_pkl + ".awk_raw.pkl"
+                    with open(raw_backup, "wb") as f:
+                        pickle.dump({"events": events, "objects": objects, "event_weights": event_weights}, f, protocol=pickle.HIGHEST_PROTOCOL)
+                    logging.info(f"Raw awkward backup saved to {raw_backup}")
+                except Exception as e:
+                    logging.warning(f"Failed to save raw awkward backup to {raw_backup}: {e}")
 
-        # Save ROOT file if specified
-        if save_root:
-            if len(events) == 0:
-                logging.debug("Skipping ROOT write: no events in this chunk/selection")
-                save_root = False
+        # Save ROOT file if specified (always write even with zero events — Metadata must be present)
 
         if save_root:
             try:
@@ -484,266 +460,164 @@ class DarkBottomLineProcessor:
 
                 logging.info(f"Creating ROOT file: {output_file_root}")
 
-                # Prepare flat scalar branches
+                # Prepare flat scalar branches — only when there are events to write
                 branches = {}
-                # Standard event identifiers
-                try:
-                    branches['event'] = ak.to_numpy(events['event'])
-                except Exception:
-                    branches['event'] = np.asarray(ak.to_list(events.get('event', [])))
-                try:
-                    branches['run'] = ak.to_numpy(events['run'])
-                except Exception:
-                    branches['run'] = np.asarray(ak.to_list(events.get('run', [])))
-                try:
-                    branches['luminosityBlock'] = ak.to_numpy(events['luminosityBlock'])
-                except Exception:
-                    branches['luminosityBlock'] = np.asarray(ak.to_list(events.get('luminosityBlock', [])))
+                if not no_events:
+                  # Standard event identifiers
+                  try:
+                      branches['event'] = ak.to_numpy(events['event'])
+                  except Exception:
+                      branches['event'] = np.asarray(ak.to_list(events.get('event', [])))
+                  try:
+                      branches['run'] = ak.to_numpy(events['run'])
+                  except Exception:
+                      branches['run'] = np.asarray(ak.to_list(events.get('run', [])))
+                  try:
+                      branches['luminosityBlock'] = ak.to_numpy(events['luminosityBlock'])
+                  except Exception:
+                      branches['luminosityBlock'] = np.asarray(ak.to_list(events.get('luminosityBlock', [])))
 
-                # MET scalars
-                def _get_met_field_array(field_name_v15, field_name_v12):
-                    if field_name_v15 in events.fields:
-                        return ak.to_numpy(events[field_name_v15])
-                    elif field_name_v12 in events.fields:
-                        return ak.to_numpy(events[field_name_v12])
-                    else:
-                        # Return an empty array of appropriate size if neither field exists
-                        return np.asarray([]) if len(events) == 0 else np.zeros(len(events), dtype=float)
+                  # MET scalars
+                  def _get_met_field_array(field_name_v15, field_name_v12):
+                      if field_name_v15 in events.fields:
+                          return ak.to_numpy(events[field_name_v15])
+                      elif field_name_v12 in events.fields:
+                          return ak.to_numpy(events[field_name_v12])
+                      else:
+                          return np.zeros(len(events), dtype=float)
 
-                branches['PFMET_pt'] = _get_met_field_array('PFMET_pt', 'MET_pt')
-                branches['PFMET_phi'] = _get_met_field_array('PFMET_phi', 'MET_phi')
-                branches['PFMET_significance'] = _get_met_field_array('PFMET_significance', 'MET_significance')
+                  branches['PFMET_pt'] = _get_met_field_array('PFMET_pt', 'MET_pt')
+                  branches['PFMET_phi'] = _get_met_field_array('PFMET_phi', 'MET_phi')
+                  branches['PFMET_significance'] = _get_met_field_array('PFMET_significance', 'MET_significance')
 
-                # Compatibility aliases requested by downstream feature consumers
-                branches['MET'] = branches['PFMET_pt']
-                branches['METPhi'] = branches['PFMET_phi']
-                branches['pfMetCorrSig'] = branches['PFMET_significance']
+                  # Recoil (event-level scalar)
+                  try:
+                      met_pt = events['PFMET_pt'] if 'PFMET_pt' in events.fields else events['MET_pt']
+                      met_phi = events['PFMET_phi'] if 'PFMET_phi' in events.fields else events['MET_phi']
 
-                # Build Jet1/Jet2 (ordered by pt) and derived variables
-                def _delta_phi(phi_a, phi_b):
-                    dphi = phi_a - phi_b
-                    return np.arctan2(np.sin(dphi), np.cos(dphi))
+                      muons = objects.get('tight_muons_pt30', ak.Array([]))
+                      electrons = objects.get('tight_electrons_pt30', ak.Array([]))
 
-                try:
-                    jets_obj = objects.get('jets', ak.Array([[] for _ in range(len(events))]))
-                    if not hasattr(jets_obj, 'fields'):
-                        jets_obj = ak.Array([[] for _ in range(len(events))])
+                      lep_px = ak.zeros_like(met_pt)
+                      lep_py = ak.zeros_like(met_pt)
+                      try:
+                          if len(ak.flatten(muons)) > 0:
+                              lep_px = lep_px + ak.sum(muons.pt * np.cos(muons.phi), axis=1)
+                              lep_py = lep_py + ak.sum(muons.pt * np.sin(muons.phi), axis=1)
+                          if len(ak.flatten(electrons)) > 0:
+                              lep_px = lep_px + ak.sum(electrons.pt * np.cos(electrons.phi), axis=1)
+                              lep_py = lep_py + ak.sum(electrons.pt * np.sin(electrons.phi), axis=1)
+                      except (Exception, BaseException):
+                          pass
 
-                    # Sort jets in each event by descending pt to define Jet1/Jet2
-                    jets_sorted = jets_obj
-                    if hasattr(jets_obj, 'fields') and 'pt' in jets_obj.fields:
-                        sort_idx = ak.argsort(jets_obj.pt, axis=1, ascending=False)
-                        jets_sorted = jets_obj[sort_idx]
+                      recoil_px = -(met_pt * np.cos(met_phi) + lep_px)
+                      recoil_py = -(met_pt * np.sin(met_phi) + lep_py)
+                      recoil = np.sqrt(recoil_px**2 + recoil_py**2)
+                      branches['recoil'] = ak.to_numpy(ak.fill_none(recoil, 0.0))
+                  except Exception:
+                      branches['recoil'] = np.zeros(len(events), dtype=float)
 
-                    jets_padded = ak.pad_none(jets_sorted, 2, axis=1, clip=True)
-                    jet1 = jets_padded[:, 0]
-                    jet2 = jets_padded[:, 1]
+                  # Object multiplicities
+                  def safe_num(obj_key):
+                      arr = objects.get(obj_key, ak.Array([]))
+                      try:
+                          return ak.to_numpy(ak.num(arr, axis=1))
+                      except Exception:
+                          return np.asarray([0] * len(branches.get('event', [])))
 
-                    n_jets_evt = ak.num(jets_sorted, axis=1)
-                    has_1 = n_jets_evt >= 1
-                    has_2 = n_jets_evt >= 2
+                  branches['n_muons'] = safe_num('muons')
+                  branches['n_electrons'] = safe_num('electrons')
+                  branches['n_taus'] = safe_num('taus')
+                  branches['n_jets'] = safe_num('jets')
+                  branches['n_bjets'] = safe_num('bjets')
 
-                    def _get_jet_field(jet_arr, field_name):
-                        try:
-                            if hasattr(jet_arr, 'fields') and field_name in jet_arr.fields:
-                                return ak.fill_none(jet_arr[field_name], 0.0, axis=0)
-                        except Exception:
-                            pass
-                        return ak.zeros_like(has_1, dtype=np.float64)
+                  # Add key object kinematics (jagged per-event branches where available)
+                  def _add_object_branch(obj_key, field, branch_name):
+                      obj_arr = objects.get(obj_key)
+                      if obj_arr is None:
+                          return
+                      try:
+                          if hasattr(obj_arr, 'fields') and field in obj_arr.fields:
+                              branches[branch_name] = obj_arr[field]
+                      except Exception:
+                          pass
 
-                    met_pt_arr = events['PFMET_pt'] if 'PFMET_pt' in events.fields else events['MET_pt']
-                    met_phi_arr = events['PFMET_phi'] if 'PFMET_phi' in events.fields else events['MET_phi']
+                  object_field_map = {
+                      'muons': {
+                          'pt': 'muon_pt',
+                          'eta': 'muon_eta',
+                          'phi': 'muon_phi',
+                      },
+                      'electrons': {
+                          'pt': 'electron_pt',
+                          'eta': 'electron_eta',
+                          'phi': 'electron_phi',
+                      },
+                      'jets': {
+                          'pt': 'jet_pt',
+                          'eta': 'jet_eta',
+                          'phi': 'jet_phi',
+                          'btagDeepFlavB': 'jet_btag',
+                      },
+                      'bjets': {
+                          'pt': 'bjet_pt',
+                          'eta': 'bjet_eta',
+                          'phi': 'bjet_phi',
+                      },
+                      'taus': {
+                          'pt': 'tau_pt',
+                          'eta': 'tau_eta',
+                          'phi': 'tau_phi',
+                      },
+                      'fatjets': {
+                          'pt': 'fatjet_pt',
+                          'eta': 'fatjet_eta',
+                          'phi': 'fatjet_phi',
+                          'mass': 'fatjet_mass',
+                      },
+                  }
 
-                    j1_pt = ak.where(has_1, _get_jet_field(jet1, 'pt'), 0.0)
-                    j1_eta = ak.where(has_1, _get_jet_field(jet1, 'eta'), 0.0)
-                    j1_phi = ak.where(has_1, _get_jet_field(jet1, 'phi'), 0.0)
-                    j1_mass = ak.where(has_1, _get_jet_field(jet1, 'mass'), 0.0)
-                    j1_btag = ak.where(has_1, _get_jet_field(jet1, 'btagDeepFlavB'), 0.0)
+                  for object_key, field_map in object_field_map.items():
+                      for src_field, dst_branch in field_map.items():
+                          _add_object_branch(object_key, src_field, dst_branch)
 
-                    j2_pt = ak.where(has_2, _get_jet_field(jet2, 'pt'), 0.0)
-                    j2_eta = ak.where(has_2, _get_jet_field(jet2, 'eta'), 0.0)
-                    j2_phi = ak.where(has_2, _get_jet_field(jet2, 'phi'), 0.0)
-                    j2_mass = ak.where(has_2, _get_jet_field(jet2, 'mass'), 0.0)
-                    j2_btag = ak.where(has_2, _get_jet_field(jet2, 'btagDeepFlavB'), 0.0)
-
-                    dphi12 = _delta_phi(j1_phi, j2_phi)
-                    dphi12_abs = np.abs(dphi12)
-                    deta12_abs = np.abs(j1_eta - j2_eta)
-                    dr12 = np.sqrt(deta12_abs ** 2 + dphi12_abs ** 2)
-
-                    # Dijet four-vector from (pt, eta, phi, mass)
-                    px12 = j1_pt * np.cos(j1_phi) + j2_pt * np.cos(j2_phi)
-                    py12 = j1_pt * np.sin(j1_phi) + j2_pt * np.sin(j2_phi)
-                    pz12 = j1_pt * np.sinh(j1_eta) + j2_pt * np.sinh(j2_eta)
-                    e1 = np.sqrt((j1_pt * np.cosh(j1_eta)) ** 2 + j1_mass ** 2)
-                    e2 = np.sqrt((j2_pt * np.cosh(j2_eta)) ** 2 + j2_mass ** 2)
-                    e12 = e1 + e2
-                    pt12 = np.sqrt(px12 ** 2 + py12 ** 2)
-                    m12_sq = e12 ** 2 - px12 ** 2 - py12 ** 2 - pz12 ** 2
-                    m12 = np.sqrt(np.maximum(m12_sq, 0.0))
-
-                    dphi_jet_met = np.abs(_delta_phi(j1_phi, met_phi_arr))
-                    r_jet1_met = ak.where(met_pt_arr > 0.0, j1_pt / met_pt_arr, 0.0)
-
-                    # Variables requested in task image/definition
-                    branches['JetHT'] = ak.to_numpy(ak.sum(jets_sorted.pt, axis=1)) if hasattr(jets_sorted, 'fields') and 'pt' in jets_sorted.fields else np.zeros(len(events), dtype=float)
-                    branches['Jet1Pt'] = ak.to_numpy(j1_pt)
-                    branches['Jet2Pt'] = ak.to_numpy(j2_pt)
-                    branches['Jet1Eta'] = ak.to_numpy(j1_eta)
-                    branches['Jet2Eta'] = ak.to_numpy(j2_eta)
-                    branches['Jet1Phi'] = ak.to_numpy(j1_phi)
-                    branches['Jet2Phi'] = ak.to_numpy(j2_phi)
-                    branches['Jet1deepCSV'] = ak.to_numpy(j1_btag)
-                    branches['Jet2deepCSV'] = ak.to_numpy(j2_btag)
-                    branches['dPhiJet12'] = ak.to_numpy(ak.where(has_2, dphi12_abs, 0.0))
-                    branches['DetaJet12'] = ak.to_numpy(ak.where(has_2, deta12_abs, 0.0))
-                    branches['dRJet12'] = ak.to_numpy(ak.where(has_2, dr12, 0.0))
-                    branches['eta_Jet1Jet2'] = ak.to_numpy(ak.where(has_2, j1_eta + j2_eta, 0.0))
-                    branches['phi_Jet1Jet2'] = ak.to_numpy(ak.where(has_2, j1_phi + j2_phi, 0.0))
-                    branches['pT_Jet1Jet2'] = ak.to_numpy(ak.where(has_2, pt12, 0.0))
-                    branches['M_Jet1Jet2'] = ak.to_numpy(ak.where(has_2, m12, 0.0))
-                    branches['dPhi_jetMET'] = ak.to_numpy(ak.where(has_1, dphi_jet_met, 0.0))
-                    branches['rJet1PtMET'] = ak.to_numpy(ak.where(has_1, r_jet1_met, 0.0))
-                    branches['costheta_star'] = ak.to_numpy(ak.where(has_2, np.abs(np.tanh((j1_eta - j2_eta) / 2.0)), 0.0))
-                except Exception as e:
-                    logging.warning(f"Failed to build Jet1/Jet2 derived variables: {e}", exc_info=True)
-
-                # Recoil (event-level scalar), aligned with event selection definition
-                try:
-                    recoil = calculate_recoil(events, objects)
-                    branches['recoil'] = ak.to_numpy(recoil)
-                except Exception:
-                    branches['recoil'] = np.zeros(len(events), dtype=float)
-
-                # Object multiplicities
-                def safe_num(obj_key):
-                    arr = objects.get(obj_key, ak.Array([]))
-                    try:
-                        return ak.to_numpy(ak.num(arr, axis=1))
-                    except Exception:
-                        return np.asarray([0] * len(branches.get('event', [])))
-
-                branches['n_muons'] = safe_num('muons')
-                branches['n_electrons'] = safe_num('electrons')
-                branches['n_taus'] = safe_num('taus')
-                branches['n_jets'] = safe_num('jets')
-                branches['n_bjets'] = safe_num('bjets')
-
-                # Add key object kinematics (jagged per-event branches where available)
-                def _add_object_branch(obj_key, field, branch_name):
-                    obj_arr = objects.get(obj_key)
-                    if obj_arr is None:
-                        return
-                    try:
-                        if hasattr(obj_arr, 'fields') and field in obj_arr.fields:
-                            branches[branch_name] = obj_arr[field]
-                    except Exception:
-                        pass
-
-                object_field_map = {
-                    'muons': {
-                        'pt': 'muon_pt',
-                        'eta': 'muon_eta',
-                        'phi': 'muon_phi',
-                    },
-                    'electrons': {
-                        'pt': 'electron_pt',
-                        'eta': 'electron_eta',
-                        'phi': 'electron_phi',
-                    },
-                    'jets': {
-                        'pt': 'jet_pt',
-                        'eta': 'jet_eta',
-                        'phi': 'jet_phi',
-                        'btagDeepFlavB': 'jet_btag',
-                    },
-                    'bjets': {
-                        'pt': 'bjet_pt',
-                        'eta': 'bjet_eta',
-                        'phi': 'bjet_phi',
-                    },
-                    'taus': {
-                        'pt': 'tau_pt',
-                        'eta': 'tau_eta',
-                        'phi': 'tau_phi',
-                    },
-                    'fatjets': {
-                        'pt': 'fatjet_pt',
-                        'eta': 'fatjet_eta',
-                        'phi': 'fatjet_phi',
-                        'mass': 'fatjet_mass',
-                    },
-                }
-
-                for object_key, field_map in object_field_map.items():
-                    for src_field, dst_branch in field_map.items():
-                        _add_object_branch(object_key, src_field, dst_branch)
-
-                # Add event weights if provided
-                if event_weights:
-                    for name, val in event_weights.items():
-                        if isinstance(val, dict):
-                            # Dictionary with central/up/down variations
-                            for var, arr in val.items():
-                                if isinstance(arr, np.ndarray):
-                                    branches[f'{name}_{var}'] = arr
-                        elif isinstance(val, np.ndarray):
-                            branches[name] = val
+                  # Add event weights if provided
+                  if event_weights:
+                      for name, val in event_weights.items():
+                          if isinstance(val, dict):
+                              for var, arr in val.items():
+                                  if isinstance(arr, np.ndarray):
+                                      branches[f'{name}_{var}'] = arr
+                          elif isinstance(val, np.ndarray):
+                              branches[name] = val
 
                 # Write to ROOT
                 outdir = os.path.dirname(output_file_root)
                 if outdir:
                     os.makedirs(outdir, exist_ok=True)
 
+                n_selected = 0 if no_events else len(events)
                 with uproot.recreate(output_file_root) as f:
-                    f['Events'] = branches
+                    if not no_events and branches:
+                        f['Events'] = branches
+                    else:
+                        logging.info("No selected events — writing ROOT file with Metadata only (empty Events tree omitted)")
 
-                    # Add metadata tree with n_events (total events before selection)
-                    if n_events_total is not None or cutflow:
-                        metadata_dict = {
-                            'n_selected_events': np.array([len(events)], dtype=np.int64),
-                        }
-                        if n_events_total is not None:
-                            metadata_dict['n_events'] = np.array([n_events_total], dtype=np.int64)
-                        if h_total_weight is not None:
-                            metadata_dict['h_total_weight'] = np.array([h_total_weight], dtype=np.float64)
-
-                        # Persist cutflow as scalar metadata branches (robust and easy to inspect).
-                        if cutflow:
-                            def _sanitize_cut_name(cut_name: str) -> str:
-                                safe = ''.join(ch if ch.isalnum() else '_' for ch in str(cut_name).lower())
-                                safe = safe.strip('_')
-                                return safe or 'unnamed_cut'
-
-                            total_for_fraction = None
-                            if 'Total events' in cutflow:
-                                total_for_fraction = float(cutflow['Total events'])
-                            elif len(cutflow) > 0:
-                                try:
-                                    total_for_fraction = float(max(cutflow.values()))
-                                except Exception:
-                                    total_for_fraction = None
-
-                            metadata_dict['cutflow_n_steps'] = np.array([len(cutflow)], dtype=np.int32)
-                            for idx, (cut_name, count) in enumerate(cutflow.items()):
-                                safe_name = _sanitize_cut_name(cut_name)
-                                value = int(count)
-                                metadata_dict[f'cf_{idx:02d}_{safe_name}'] = np.array([value], dtype=np.int64)
-                                frac = 0.0
-                                if total_for_fraction and total_for_fraction > 0.0:
-                                    frac = value / total_for_fraction
-                                metadata_dict[f'cf_{idx:02d}_{safe_name}_frac'] = np.array([frac], dtype=np.float64)
-
-                        f['Metadata'] = metadata_dict
-                        if n_events_total is not None:
-                            logging.info(f"Added n_events={n_events_total} to ROOT file metadata")
-                        if cutflow:
-                            logging.info(f"Added cutflow with {len(cutflow)} steps to ROOT file metadata")
+                    # Always write Metadata so downstream tools can read n_events / h_total_weight
+                    metadata_dict = {
+                        'n_selected_events': np.array([n_selected], dtype=np.int64),
+                    }
+                    if n_events_total is not None:
+                        metadata_dict['n_events'] = np.array([n_events_total], dtype=np.int64)
+                    if h_total_weight is not None:
+                        metadata_dict['h_total_weight'] = np.array([h_total_weight], dtype=np.float64)
+                    f['Metadata'] = metadata_dict
+                    logging.info(f"Added n_events={n_events_total}, n_selected_events={n_selected} to ROOT file metadata")
 
                 # Verify file was created
                 if os.path.exists(output_file_root):
                     file_size = os.path.getsize(output_file_root)
-                    logging.info(f"✓ Event selection exported to ROOT file {output_file_root} ({file_size} bytes, {len(events)} events)")
+                    logging.info(f"✓ Event selection exported to ROOT file {output_file_root} ({file_size} bytes, {n_selected} events)")
                 else:
                     logging.error(f"✗ ROOT file {output_file_root} was not created!")
             except Exception as e:
@@ -809,6 +683,9 @@ class DarkBottomLineProcessor:
         """Save results as ROOT file (histograms + per-event weight tree)."""
         try:
             import uproot
+            outdir = os.path.dirname(output_file)
+            if outdir:
+                os.makedirs(outdir, exist_ok=True)
             with uproot.recreate(output_file) as f:
                 # Save histograms
                 for name, hist in self.accumulator["histograms"].items():
@@ -835,6 +712,9 @@ class DarkBottomLineProcessor:
     def _save_pickle(self, output_file: str):
         """Save results as pickle file."""
         import pickle
+        outdir = os.path.dirname(output_file)
+        if outdir:
+            os.makedirs(outdir, exist_ok=True)
         with open(output_file, 'wb') as f:
             pickle.dump(self.accumulator, f)
         logging.info(f"Saved results to {output_file}")
