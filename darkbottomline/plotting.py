@@ -1218,7 +1218,8 @@ class PlotManager:
 
         # Signal overlays — draw first 3 as dashed lines (PNG/PDF only; all go to ROOT)
         if signal_rows:
-            for _si, (_slabel, _shv, _raw_key, _unscaled_hv) in enumerate(signal_rows[:3]):
+            for _si, _srow in enumerate(signal_rows[:3]):
+                _slabel, _shv = _srow[0], _srow[1]
                 _sc = self.signal_colors[_si % len(self.signal_colors)]
                 ax.stairs(
                     _shv, bins, baseline=0,

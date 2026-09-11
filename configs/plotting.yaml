@@ -588,6 +588,12 @@ variable_bins:
     low: 0.0
     high: 100.0
     n: 26
+signal_groups:
+  Signal_2HDMa:
+    type: signal
+    patterns:
+    - BBDM-2HDMa
+
 process_groups:
   WtoLNuJets:
     type: background
