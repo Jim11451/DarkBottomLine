@@ -22,10 +22,86 @@ class HistogramManager:
     Manager class for creating and filling histograms.
     """
 
-    def __init__(self):
-        """Initialize histogram manager."""
+    def __init__(self, config=None):
+        """Initialize histogram manager.
+
+        config: optional plotting config dict (for `variable_bins`). If not
+        given, configs/plotting.yaml next to the package is loaded so that
+        the region histograms use the SAME binning as the plots/combine.
+        """
         self.histograms = {}
         self.hist_specs = {}
+        self.config = config or {}
+        if not self.config:
+            try:
+                import yaml
+                from pathlib import Path as _P
+                _p = _P(__file__).resolve().parent.parent / "configs" / "plotting.yaml"
+                if _p.exists():
+                    with open(_p) as _f:
+                        self.config = yaml.safe_load(_f) or {}
+                    logging.info("HistogramManager: loaded binning config from %s", _p)
+            except Exception as _e:
+                logging.warning("HistogramManager: could not load plotting.yaml (%s)", _e)
+
+    # pkl variable name -> plotting.yaml variable_bins key (only where they differ)
+    _BIN_ALIASES = {
+        "met": "MET_pt",
+        "recoil": "recoil",
+        "met_phi": "MET_phi",
+        "n_jets": "njets",
+    }
+
+    def _apply_config_bins(self, histograms):
+        """Rebuild histogram axes from plotting.yaml `variable_bins`.
+
+        For every histogram whose variable has an entry in variable_bins,
+        replace its axis with the yaml-defined edges (non-uniform) or
+        (low, high, n) regular binning. Variables without a yaml entry keep
+        their hard-coded defaults.
+        """
+        try:
+            import hist as _hist
+        except Exception:
+            return histograms
+        vb = (self.config or {}).get("variable_bins", {}) or {}
+        if not vb:
+            return histograms
+        # case-insensitive lookup table
+        vb_lower = {str(k).lower(): v for k, v in vb.items()}
+        applied = []
+        for name, h in list(histograms.items()):
+            spec = vb.get(name)
+            if spec is None:
+                alias = self._BIN_ALIASES.get(name)
+                if alias is not None:
+                    spec = vb.get(alias)
+            if spec is None:
+                spec = vb_lower.get(str(name).lower())
+            if not isinstance(spec, dict):
+                continue
+            try:
+                label = None
+                try:
+                    label = h.axes[0].label
+                except Exception:
+                    pass
+                if "edges" in spec:
+                    edges = np.asarray(spec["edges"], dtype=float)
+                    newax = _hist.axis.Variable(edges, name=name, label=label or name)
+                elif "low" in spec and "high" in spec and "n" in spec:
+                    newax = _hist.axis.Regular(int(spec["n"]), float(spec["low"]),
+                                               float(spec["high"]), name=name, label=label or name)
+                else:
+                    continue
+                histograms[name] = _hist.Hist(newax, storage=_hist.storage.Weight())
+                applied.append(name)
+            except Exception as _e:
+                logging.warning("HistogramManager: could not apply yaml bins for %s (%s)", name, _e)
+        if applied:
+            logging.info("HistogramManager: applied yaml variable_bins to %d histograms: %s",
+                         len(applied), ", ".join(applied))
+        return histograms
 
     def define_histograms(self) -> Dict[str, Any]:
         """
@@ -35,7 +111,7 @@ class HistogramManager:
             Dictionary of histogram specifications
         """
         if HIST_AVAILABLE:
-            return self._define_hist_histograms()
+            return self._apply_config_bins(self._define_hist_histograms())
         else:
             return self._define_fallback_histograms()
 
